@@ -2,7 +2,7 @@
 // 同时解析 SSR 内嵌的 script#RENDER_DATA（登录态弹窗视频数据就在这），
 // 提取候选视频列表发给隔离世界；负责在页面上下文下载视频（fetch→blob→<a download>）。
 (() => {
-  console.log("[dy-dl] main v0.3.6");
+  console.log("[dy-dl] main v0.3.7");
   const MSG = "DY_EXT_MESSAGE";
   const origFetch = window.fetch;
   const DEBUG = true;
@@ -43,7 +43,7 @@
   // ---- SSR 内嵌数据：script#RENDER_DATA（登录态弹窗视频的关键数据源） ----
   function parseRenderData() {
     const el = document.querySelector("script#RENDER_DATA");
-    if (!el || !el.textContent) return null;
+    if (!el) return null;
     try {
       return JSON.parse(el.textContent);
     } catch (e) {
@@ -56,15 +56,27 @@
   }
 
   function scanRenderData() {
+    const el = document.querySelector("script#RENDER_DATA");
+    if (!el) log("RENDER_DATA script: NOT FOUND");
     const data = parseRenderData();
     if (!data) return;
     const list = extractCandidates(data);
-    if (list.length) {
-      log("RENDER_DATA candidates:", list.length,
-        "ids:", list.map((c) => c.aweme_id).slice(0, 6).join(","));
-      notify({ kind: "video_candidates", candidates: list });
-    }
+    log("RENDER_DATA candidates:", list.length,
+      list.length ? "ids: " + list.map((c) => c.aweme_id).slice(0, 6).join(",") : "(无候选)");
+    if (list.length) notify({ kind: "video_candidates", candidates: list });
   }
+
+  // 每 2 秒重扫 RENDER_DATA，并顺带看 performance 里出现的视频直链
+  setInterval(() => {
+    scanRenderData();
+    try {
+      const urls = performance
+        .getEntriesByType("resource")
+        .map((e) => e.name)
+        .filter((u) => u.includes("douyinvod"));
+      if (urls.length) log("perf douyinvod:", urls.length, "|", urls[urls.length - 1].slice(0, 100));
+    } catch (e) {}
+  }, 2000);
 
   // ---- hook fetch ----
   window.fetch = async function (...args) {
@@ -164,6 +176,6 @@
     }
   }
 
-  // RENDER_DATA 是 SSR 内嵌，页面加载后轮询几次即可拿到弹窗视频
-  [800, 2000, 4000].forEach((ms) => setTimeout(scanRenderData, ms));
+  // 立即扫一次 RENDER_DATA
+  setTimeout(scanRenderData, 500);
 })();
