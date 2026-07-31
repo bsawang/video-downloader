@@ -26,11 +26,8 @@
   function pickCurrent() {
     if (!candidates.length) return null;
     const id = currentIdFromUrl();
-    if (id) {
-      const hit = candidates.find((c) => String(c.aweme_id) === id);
-      if (hit) return hit;
-    }
-    return candidates[candidates.length - 1];
+    if (!id) return null; // 无法确认当前视频，宁可不出按钮也不下载错视频
+    return candidates.find((c) => String(c.aweme_id) === id) || null;
   }
 
   function toInfo(item) {
@@ -151,6 +148,7 @@
   function render() {
     const shadow = root.shadowRoot;
     const $ = (sel) => shadow.querySelector(sel);
+    $(".fab").classList.remove("hidden");
     $(".title").textContent = current.title;
     $(".author").textContent = "@" + current.author;
     const sel = $(".quality");
@@ -183,9 +181,22 @@
   }
 
   function onCandidates(cands) {
-    candidates = cands;
+    // 累计候选（按 aweme_id 去重），避免被后到的推荐流响应覆盖掉 detail 数据
+    for (const c of cands) {
+      const cid = String(c.aweme_id);
+      if (!candidates.some((x) => String(x.aweme_id) === cid)) candidates.push(c);
+    }
     const info = toInfo(pickCurrent());
     if (info && info.videoId) showVideo(info);
+    else hideVideo();
+  }
+
+  function hideVideo() {
+    current = null;
+    if (!root) return;
+    const shadow = root.shadowRoot;
+    shadow.querySelector(".panel").classList.add("hidden");
+    shadow.querySelector(".fab").classList.add("hidden");
   }
 
   // 收页面世界消息
@@ -217,11 +228,11 @@
   // 监听 URL 变化（SPA 切换视频）→ 重新匹配当前视频
   let lastId = null;
   setInterval(() => {
-    if (!candidates.length) return;
     const id = currentIdFromUrl();
     if (id === lastId) return;
     lastId = id;
     const info = toInfo(pickCurrent());
     if (info && info.videoId) showVideo(info);
+    else hideVideo();
   }, 800);
 })();
