@@ -4,4 +4,4 @@ __pycache__/
 downloads/*
 !downloads/.gitkeep
 
-spikes/.pwtmp/
+spikes/.pwtmp*/
