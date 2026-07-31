@@ -90,6 +90,7 @@
     this.addEventListener("load", () => {
       try {
         if (this.__dyUrl && isApiUrl(this.__dyUrl)) {
+          log("xhr resp:", this.__dyUrl.slice(0, 120));
           const data = JSON.parse(this.responseText);
           const list = extractCandidates(data);
           if (list.length) notify({ kind: "video_candidates", candidates: list });
@@ -149,5 +150,23 @@
     } catch (e) {
       notify({ kind: "download_status", ok: false, error: String(e) });
     }
+  }
+
+  // ---- 调试：弹窗视频数据源排查 ----
+  if (modalId) {
+    setTimeout(() => {
+      try {
+        const html = document.documentElement.outerHTML;
+        if (html.includes(modalId)) log(">>> modal_id FOUND in DOM html");
+        for (const key of ["__INITIAL_STATE__", "_ROUTER_DATA", "__PRELOADED_STATE__", "SIGI_STATE"]) {
+          try {
+            const v = window[key];
+            if (v && JSON.stringify(v).includes(modalId)) log(">>> modal_id FOUND in window." + key);
+          } catch (e) {}
+        }
+        const v = document.querySelector("video");
+        if (v && v.currentSrc) log("video.currentSrc:", v.currentSrc.slice(0, 130));
+      } catch (e) {}
+    }, 6000);
   }
 })();
