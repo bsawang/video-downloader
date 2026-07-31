@@ -19,7 +19,7 @@
 | 目标平台 | 抖音（首发）→ 快手/小红书/B站/YouTube/TikTok（陆续接入） |
 | 形态 | 本地 Web（第一版）→ 自用部署 → 浏览器插件（远期） |
 | 解析 | 全部自研，零外部下载引擎依赖 |
-| 技术栈 | Python 3.11+ / FastAPI / httpx / ffmpeg（按需）/ 原生 JS 前端 |
+| 技术栈 | Python 3.11+ / FastAPI / httpx / Playwright（驱动本地 Edge，解析用）/ ffmpeg（按需合成）/ 原生 JS 前端 |
 | 功能 | 清晰度选择 + 无水印 |
 | 第一版流程 | 粘贴链接 → 解析 → 选清晰度 → 下载 |
 | 首发平台 | 抖音 |
@@ -116,46 +116,51 @@ class ProviderError(Exception):
 
 ## 6. 抖音解析器设计（providers/douyin.py）
 
+**2026-08-01 spike 修正**：抖音 web 端纯 HTTP 解析已锁死（无 Cookie → 空 JS 壳、带 Cookie → 验证码中间页、数据接口强制 a_bogus/X-Bogus 签名），`_ROUTER_DATA` 不再出现在原始 HTML。改用 **Playwright 无头浏览器方案**（已验证可行）。
+
 ### 解析链路
 
 ```
-① 用户粘贴短链  https://v.douyin.com/AbC123x/
-   → httpx.Client 跟随 302 重定向，path 取 aweme_id
-② 抓视频页 HTML（浏览器 UA），Client 自动捕获页面 Cookie
-③ 从 HTML 提取 window._ROUTER_DATA JSON
-   → loaderData → item_list[0]（完整视频对象）
+① 解析 video_id（轻量，httpx 跟随重定向）
+   短链 https://v.douyin.com/xxx/ → 302 → 最终 URL
+   从 URL 提取：/video/{id} 或 query 中的 modal_id={id}
+   （jingxuan 搜索链接等即 modal_id 形态）
+② Playwright + 本地 Edge（channel="msedge"，headless，无需下载浏览器）
+   打开 https://www.douyin.com/video/{id}
+   真实 JS 自动生成签名/设备指纹/Cookie，通过风控
+③ 拦截页面自身的 /aweme/v1/web/aweme/detail/ 响应
+   → resp.json() → aweme_detail（完整视频对象）
 ④ 提取：desc / author.nickname / video.cover.url_list
-        / video.bit_rate[]（gear_name + play_addr.url_list）
-        / video.play_addr（默认无水印源）
-⑤ 返回 VideoInfo + streams[]
+        / video.bit_rate[]（gear_name + play_addr.url_list，无水印）
+⑤ 返回 VideoInfo + streams[]，关闭浏览器
 ```
 
-### 防盗链对抗（下载直链时）
+### 直链下载（防盗链，httpx 直连）
 
 | 关卡 | 平台校验 | 对策 |
 |---|---|---|
 | Referer | CDN 要求 `Referer: https://www.douyin.com/` | 下载时固定带 |
-| User-Agent | 非浏览器 UA 拒绝 | 全程统一浏览器 UA |
-| Cookie | 部分直链要求页面 Cookie | 同会话复用（httpx.Client 自动管理） |
+| User-Agent | 非浏览器 UA 拒绝 | 统一浏览器 UA |
+| Cookie | 已验证直链下载无需 Cookie | 不依赖 Cookie（spike 实测 HTTP 200） |
 
-关键：**解析 + 下载共用同一个 httpx.Client 会话**（自动 Cookie/重定向/头管理），不每次新建。
+### 清晰度标签映射
+
+`gear_name`（normal_1080_0 / normal_720_0 / low_540_0）→ 前端标签（1080p / 720p / 540p）。同一分辨率去重。
 
 ### 无水印
 
-- 优先取 `play_addr` 源（播放源本身无水印）。
-- 遇 `/playwm/` 带水印路径，替换 `/playwm/` → `/play/` 兜底（小样本实测确认）。
+`bit_rate[].play_addr` 即无水印播放源，直接取用（spike 观察为单文件合成 MP4）。
 
 ### 是否需 ffmpeg
 
-- 抖音 web 端多数清晰度为**单文件合成 MP4**，直接下载即可。
+- spike 观察到 `play_addr` 为**单文件合成 MP4**，直接下载即可，大概率不需要 ffmpeg。
 - 保留 `is_muxed=False` 合成通道兜底音视频分离的源。
-- **实现时用真实视频验证哪些清晰度是分离的**。
 
-### Spike 验证点（Phase 1 开始前）
+### Spike 验证结论（2026-08-01 已完成）
 
-1. `_ROUTER_DATA` 在当前抖音 web 端的字段路径是否仍成立（平台改版频繁）。
-2. 各清晰度是否单文件合成（决定 ffmpeg 是否成强依赖）。
-3. 哪些直链必须带 Cookie（决定会话复用严格程度）。
+1. ✅ Playwright + 本地 Edge 能加载视频页并拦截 detail API（拿到 9 路清晰度 + 真实 CDN 直链）。
+2. ✅ httpx + Referer 能直接下载 CDN 直链（HTTP 200）。
+3. ⏳ 各清晰度是否音视频分离：实现时用真实视频确认（影响 is_muxed 默认值）。
 
 ## 7. 下载器与任务管理
 
@@ -231,7 +236,7 @@ pending → downloading → done ──→ 文件可在 /api/files/ 获取
 
 | 测试对象 | 方法 |
 |---|---|
-| 抖音解析器 | 真实页面 `_ROUTER_DATA` 存为离线 fixture，单测喂 fixture；`@pytest.mark.network` 线上冒烟默认跳过 |
+| 抖音解析器 | 真实 detail API 响应存为离线 fixture，单测喂 fixture（纯提取逻辑）；Playwright 网络部分用 monkeypatch 模拟 |
 | 下载器 | mock httpx：流式写入、.part 改名、403 不重试/超时重试 |
 | ffmpeg 合成 | 迷你音视频样例验证 `-c copy` |
 | API 层 | FastAPI TestClient + mock provider 全链路 |
@@ -243,8 +248,8 @@ pending → downloading → done ──→ 文件可在 /api/files/ 获取
 
 ```
 Phase 0  骨架搭建   目录/config/registry/base.py/models.py + FastAPI 空壳
-Phase 1  抖音解析器 短链解析 → _ROUTER_DATA → streams 多路清晰度
-                   ★ spike：真实视频验证字段路径 + 音视频分离情况
+Phase 1  抖音解析器 video_id 解析 → Playwright 拦截 detail API → streams 多路清晰度
+                   ★ spike 已完成：Playwright+Edge 拦截 + httpx 直链均验证通过
 Phase 2  下载核心   下载器 + ffmpeg 通道 + 任务管理 + 5 个 API（见第 8 节）
 Phase 3  前端联调   单页 + 静态托管 + 解析→下载→完成 全流程
 Phase 4  收尾测试   fixture 单测补全 + 一键启动脚本 + README
@@ -270,7 +275,7 @@ Phase 4  收尾测试   fixture 单测补全 + 一键启动脚本 + README
 
 | 风险 | 对策 |
 |---|---|
-| 抖音平台改版导致解析失效 | 适配器隔离 + fixture 测试锁定行为，快速定位 |
+| 抖音平台改版导致解析失效 | 适配器隔离 + fixture 测试锁定行为；Playwright 拦截真实页面请求，抗改版远强于签名逆向 |
 | 全部自研维护成本高 | 平台逐个接入，按需扩展；共享核心只写一次 |
 | CDN 直链带时效 | 解析后立即下载 + 10 分钟缓存 + 过期重取 |
 | 高清源音视频分离 | ffmpeg `-c copy` 按需合成，成本极低 |

@@ -12,6 +12,7 @@
 
 - Python 3.11+（环境为 3.12.10）
 - **全部自研解析，不依赖 yt-dlp 等外部下载引擎**
+- **抖音解析用 Playwright 驱动本地浏览器**（`channel="msedge"` / `"chrome"`，headless），**不下载浏览器二进制**；拦截页面自身 detail API 响应取数
 - ffmpeg 为可选依赖：仅 `is_muxed=False` 的音视频分离源需要，`-c copy` 合成
 - 前端零构建步骤（纯 HTML/CSS/JS，不引框架/打包器）
 - 统一错误语义 `kind`：`network` / `blocked` / `not_found` / `invalid_url`
@@ -51,6 +52,7 @@ python -m venv .venv
 fastapi>=0.110
 uvicorn[standard]>=0.29
 httpx>=0.27
+playwright>=1.40
 pytest>=8.0
 ```
 
@@ -464,43 +466,38 @@ git commit -m "feat: 平台注册表"
 
 ---
 
-### Task 5: 抖音解析器（核心交付物）
+### Task 5: 抖音解析器（核心交付物，Playwright 方案）
+
+> **2026-08-01 spike 已定论**：抖音 web 端纯 HTTP 解析已锁死（`_ROUTER_DATA` 不再出现在原始 HTML，接口强制 a_bogus 签名）。改用 **Playwright 驱动本地 Edge** 加载视频页、拦截页面自身的 detail API 响应取数。spike 已验证：Playwright + msedge 拦截到 9 路清晰度 + 真实 CDN 直链；httpx + Referer 直链下载 HTTP 200。参考脚本：`spikes/spike_playwright.py`。
 
 **Files:**
 - Create: `providers/douyin.py`
-- Create: `tests/fixtures/douyin_router_data.json`
+- Create: `tests/fixtures/douyin_detail.json`
 - Test: `tests/test_douyin.py`
 
 **Interfaces:**
 - Consumes: `core.models.VideoInfo/Stream`、`core.errors.ProviderError`、`providers.base.Provider`。
-- Produces: `providers.douyin.DouyinProvider`（`host_match=("douyin.com","iesdouyin.com")`, `name="douyin"`）。内部方法 `_resolve_video_id(url)`、`_fetch_router_data(video_id)`、`_extract_video_info(router_data)`、`_extract_streams(router_data)`、`_no_watermark(url)`，供测试直接调用。
+- Produces: `providers.douyin.DouyinProvider`（`host_match=("douyin.com","iesdouyin.com")`, `name="douyin"`）。内部方法 `_extract_id_from_url(url)`、`_resolve_video_id(url)`、`_fetch_detail(video_id)`、`_extract_video_info(detail)`、`_extract_streams(detail)`、`_quality_label(gear_name)`，供测试直接调用。Task 9 API 使用 `parse/resolve_streams`。
 
-- [ ] **Step 1: 写离线 fixture tests/fixtures/douyin_router_data.json**
+- [ ] **Step 1: 写离线 fixture tests/fixtures/douyin_detail.json**
 
-基于抖音 web 端 `window._ROUTER_DATA` 的真实结构录制（字段路径以当前线上为准，spike 时若变化只改 fixture 与提取逻辑）：
+基于真实拦截到的 `/aweme/v1/web/aweme/detail/` 响应结构录制（`aweme_detail` 外层包一层，与真实响应一致）：
 
 ```json
 {
-  "loaderData": {
-    "video_(id)/page": {
-      "videoInfoRes": {
-        "item_list": [
-          {
-            "aweme_id": "7412345678901234567",
-            "desc": "测试视频标题",
-            "author": { "nickname": "测试作者" },
-            "video": {
-              "cover": { "url_list": ["https://p3.douyinpic.com/cover.jpg"] },
-              "play_addr": { "url_list": ["https://aweme.snssdk.com/aweme/v1/playwm/?video_id=default"] },
-              "bit_rate": [
-                { "gear_name": "标清", "play_addr": { "url_list": ["https://aweme.snssdk.com/aweme/v1/playwm/?video_id=sd"] } },
-                { "gear_name": "高清", "play_addr": { "url_list": ["https://aweme.snssdk.com/aweme/v1/playwm/?video_id=hd"] } },
-                { "gear_name": "超清", "play_addr": { "url_list": ["https://aweme.snssdk.com/aweme/v1/playwm/?video_id=uhd"] } }
-              ]
-            }
-          }
-        ]
-      }
+  "aweme_detail": {
+    "aweme_id": "7666780213276190857",
+    "desc": "测试视频标题",
+    "author": { "nickname": "测试作者" },
+    "video": {
+      "cover": { "url_list": ["https://p3.douyinpic.com/cover.jpg"] },
+      "play_addr": { "url_list": ["https://v26-web.douyinvod.com/default.mp4"] },
+      "bit_rate": [
+        { "gear_name": "normal_1080_0", "play_addr": { "url_list": ["https://v26-web.douyinvod.com/1080.mp4"] } },
+        { "gear_name": "normal_720_0", "play_addr": { "url_list": ["https://v26-web.douyinvod.com/720.mp4"] } },
+        { "gear_name": "normal_720_1", "play_addr": { "url_list": ["https://v26-web.douyinvod.com/720b.mp4"] } },
+        { "gear_name": "low_540_0", "play_addr": { "url_list": ["https://v26-web.douyinvod.com/540.mp4"] } }
+      ]
     }
   }
 }
@@ -517,7 +514,7 @@ import pytest
 from core.errors import ProviderError
 from providers.douyin import DouyinProvider
 
-FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "douyin_router_data.json"
+FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "douyin_detail.json"
 
 
 def _provider():
@@ -530,30 +527,37 @@ def _load():
 
 def test_extract_video_info():
     info = _provider()._extract_video_info(_load())
-    assert info.video_id == "7412345678901234567"
+    assert info.video_id == "7666780213276190857"
     assert info.title == "测试视频标题"
     assert info.author == "测试作者"
-    assert len(info.streams) == 3
-    assert [s.quality_label for s in info.streams] == ["标清", "高清", "超清"]
-    # 无水印：所有 url 不含 /playwm/
-    assert all("/playwm/" not in s.url for s in info.streams)
+    # normal_720_0 与 normal_720_1 去重后只剩一路 720p
+    assert [s.quality_label for s in info.streams] == ["1080p", "720p", "540p"]
 
 
 def test_extract_empty_raises_not_found():
     with pytest.raises(ProviderError) as ei:
-        _provider()._extract_video_info({"loaderData": {}})
+        _provider()._extract_video_info({})
     assert ei.value.kind == "not_found"
 
 
-def test_no_watermark_trick():
+def test_quality_label_mapping():
     p = _provider()
-    assert p._no_watermark("https://x.douyin.com/playwm/abc.mp4") == "https://x.douyin.com/play/abc.mp4"
+    assert p._quality_label("normal_1080_0") == "1080p"
+    assert p._quality_label("low_540_0") == "540p"
+    assert p._quality_label("") == "未知"
+
+
+def test_extract_id_from_url():
+    p = _provider()
+    assert p._extract_id_from_url("https://www.douyin.com/video/123") == "123"
+    assert p._extract_id_from_url("https://www.douyin.com/jingxuan/search/x?modal_id=456&type=general") == "456"
+    assert p._extract_id_from_url("https://v.douyin.com/abc/") is None
 
 
 def test_parse_with_mocked_network(monkeypatch):
     p = _provider()
-    monkeypatch.setattr(p, "_resolve_video_id", lambda url: "7412345678901234567")
-    monkeypatch.setattr(p, "_fetch_router_data", lambda vid: _load())
+    monkeypatch.setattr(p, "_resolve_video_id", lambda url: "7666780213276190857")
+    monkeypatch.setattr(p, "_fetch_detail", lambda vid: _load())
     info = p.parse("https://v.douyin.com/AbC123x/")
     assert info.provider == "douyin"
     assert info.title == "测试视频标题"
@@ -562,9 +566,9 @@ def test_parse_with_mocked_network(monkeypatch):
 
 def test_resolve_streams_with_mocked_network(monkeypatch):
     p = _provider()
-    monkeypatch.setattr(p, "_fetch_router_data", lambda vid: _load())
-    streams = p.resolve_streams("7412345678901234567")
-    assert [s.quality_label for s in streams] == ["标清", "高清", "超清"]
+    monkeypatch.setattr(p, "_fetch_detail", lambda vid: _load())
+    streams = p.resolve_streams("7666780213276190857")
+    assert [s.quality_label for s in streams] == ["1080p", "720p", "540p"]
 ```
 
 - [ ] **Step 3: 运行测试确认失败**
@@ -575,88 +579,122 @@ Expected: FAIL（ModuleNotFoundError: providers.douyin）。
 - [ ] **Step 4: 写 providers/douyin.py**
 
 ```python
-"""抖音解析器：短链解析 → 视频页 _ROUTER_DATA → 多路无水印清晰度。"""
-import json
+"""抖音解析器：video_id 解析 → Playwright 无头浏览器拦截 detail API → 无水印多路清晰度。
+
+spike 结论（2026-08-01）：抖音 web 端纯 HTTP 解析已锁死（_ROUTER_DATA 不再出现在
+HTML，接口强制 a_bogus 签名）。改用 Playwright 驱动本地 Edge，真实 JS 自动签名过风控，
+拦截页面自身的 /aweme/v1/web/aweme/detail/ 响应取数。
+"""
 import re
+import time
 
 import httpx
+from playwright.sync_api import sync_playwright
 
 from core.errors import ProviderError
 from core.models import Stream, VideoInfo
 from providers.base import Provider
 
-# 统一浏览器 UA（防盗链三关之一）
+# 统一浏览器 UA
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
 VIDEO_URL = "https://www.douyin.com/video/{video_id}"
+DETAIL_PATH = "aweme/v1/web/aweme/detail"
 
 
 class DouyinProvider(Provider):
     host_match = ("douyin.com", "iesdouyin.com")
     name = "douyin"
 
-    def __init__(self, client: httpx.Client | None = None):
-        self._client = client
+    def __init__(self, http_client: httpx.Client | None = None):
+        self._http_client = http_client
 
-    def _get_client(self) -> httpx.Client:
-        """解析+下载共用同一会话，自动复用 Cookie / 重定向 / 请求头。"""
-        if self._client is None:
-            self._client = httpx.Client(
+    def _get_http_client(self) -> httpx.Client:
+        if self._http_client is None:
+            self._http_client = httpx.Client(
                 follow_redirects=True,
                 headers={"User-Agent": UA},
                 timeout=20.0,
             )
-        return self._client
+        return self._http_client
+
+    # ---- 主流程 ----
 
     def parse(self, url: str) -> VideoInfo:
         video_id = self._resolve_video_id(url)
-        data = self._fetch_router_data(video_id)
-        info = self._extract_video_info(data)
+        detail = self._fetch_detail(video_id)
+        info = self._extract_video_info(detail)
         if not info.video_id:
             info.video_id = video_id
         return info
 
     def resolve_streams(self, video_id: str) -> list[Stream]:
-        data = self._fetch_router_data(video_id)
-        return self._extract_streams(data)
+        detail = self._fetch_detail(video_id)
+        return self._extract_streams(detail)
 
     # ---- 网络部分 ----
 
-    def _resolve_video_id(self, url: str) -> str:
-        client = self._get_client()
-        resp = client.get(url)
-        final_url = str(resp.url)
-        m = re.search(r"/video/(\d+)", final_url)
-        if not m:
-            raise ProviderError("invalid_url", "不是有效的单个视频链接")
-        return m.group(1)
+    def _extract_id_from_url(self, url: str) -> str | None:
+        m = re.search(r"/video/(\d+)", url)
+        if m:
+            return m.group(1)
+        m = re.search(r"[?&]modal_id=(\d+)", url)
+        if m:
+            return m.group(1)
+        return None
 
-    def _fetch_router_data(self, video_id: str) -> dict:
-        client = self._get_client()
-        resp = client.get(VIDEO_URL.format(video_id=video_id))
-        if resp.status_code == 403:
-            raise ProviderError("blocked", "被风控，稍后再试")
-        if resp.status_code != 200:
-            raise ProviderError("network", f"获取视频页失败 HTTP {resp.status_code}")
-        m = re.search(
-            r"window\._ROUTER_DATA\s*=\s*(\{.*?\});?\s*</script>",
-            resp.text,
-            re.S,
-        )
-        if not m:
-            raise ProviderError("blocked", "解析数据失败，可能被风控")
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            raise ProviderError("blocked", "解析数据失败，可能被风控")
+    def _resolve_video_id(self, url: str) -> str:
+        client = self._get_http_client()
+        vid = self._extract_id_from_url(url)
+        if vid is None:
+            try:
+                resp = client.get(url)  # 短链 v.douyin.com 跟随 302
+                vid = self._extract_id_from_url(str(resp.url))
+            except httpx.HTTPError:
+                vid = None
+        if not vid:
+            raise ProviderError("invalid_url", "不是有效的单个视频链接")
+        return vid
+
+    def _fetch_detail(self, video_id: str) -> dict:
+        """Playwright 驱动本地 Edge，拦截 detail API 响应。"""
+        captured: dict[str, dict] = {}
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="msedge", headless=True)
+            try:
+                ctx = browser.new_context(user_agent=UA,
+                                          viewport={"width": 1280, "height": 800})
+                page = ctx.new_page()
+
+                def on_response(resp):
+                    if DETAIL_PATH in resp.url:
+                        try:
+                            data = resp.json()
+                            if isinstance(data, dict) and "aweme_detail" in data:
+                                captured["data"] = data
+                        except Exception:
+                            pass
+
+                page.on("response", on_response)
+                page.goto(VIDEO_URL.format(video_id=video_id),
+                          wait_until="networkidle", timeout=40000)
+                for _ in range(20):  # 最多再等 10 秒
+                    if "data" in captured:
+                        break
+                    time.sleep(0.5)
+                if "data" not in captured:
+                    raise ProviderError("blocked", "未能获取视频数据，可能被风控")
+                return captured["data"]
+            finally:
+                browser.close()
 
     # ---- 纯提取逻辑（离线可测） ----
 
-    def _extract_video_info(self, router_data: dict) -> VideoInfo:
-        item = self._find_item(router_data)
+    def _extract_video_info(self, detail: dict) -> VideoInfo:
+        item = detail.get("aweme_detail")
         if not item:
             raise ProviderError("not_found", "视频不存在或已下架")
         video = item.get("video") or {}
@@ -668,74 +706,52 @@ class DouyinProvider(Provider):
             title=item.get("desc") or "",
             author=author.get("nickname") or "",
             cover_url=cover[0],
-            streams=self._extract_streams(router_data),
+            streams=self._extract_streams(detail),
         )
 
-    def _extract_streams(self, router_data: dict) -> list[Stream]:
-        item = self._find_item(router_data)
-        if not item:
-            return []
+    def _extract_streams(self, detail: dict) -> list[Stream]:
+        item = detail.get("aweme_detail") or {}
         video = item.get("video") or {}
         streams: list[Stream] = []
+        seen: set[str] = set()
         for br in video.get("bit_rate") or []:
             urls = ((br.get("play_addr") or {}).get("url_list")) or []
             if not urls:
                 continue
-            streams.append(Stream(
-                quality_label=br.get("gear_name") or "未知",
-                url=self._no_watermark(urls[0]),
-                is_muxed=True,
-            ))
+            label = self._quality_label(br.get("gear_name") or "")
+            if label in seen:
+                continue
+            seen.add(label)
+            streams.append(Stream(quality_label=label, url=urls[0], is_muxed=True))
         if not streams:
             urls = ((video.get("play_addr") or {}).get("url_list")) or []
             if urls:
-                streams.append(Stream(
-                    quality_label="默认",
-                    url=self._no_watermark(urls[0]),
-                    is_muxed=True,
-                ))
+                streams.append(Stream(quality_label="默认", url=urls[0], is_muxed=True))
         return streams
 
-    def _find_item(self, node) -> dict | None:
-        """递归搜索 item_list[0]，对 _ROUTER_DATA 键名变化有韧性。"""
-        if isinstance(node, dict):
-            item_list = node.get("item_list")
-            if isinstance(item_list, list) and item_list and isinstance(item_list[0], dict):
-                return item_list[0]
-            for v in node.values():
-                found = self._find_item(v)
-                if found:
-                    return found
-        elif isinstance(node, list):
-            for v in node:
-                found = self._find_item(v)
-                if found:
-                    return found
-        return None
-
-    def _no_watermark(self, url: str) -> str:
-        """playwm 路径 → play 路径，去水印兜底。"""
-        return url.replace("/playwm/", "/play/")
+    def _quality_label(self, gear_name: str) -> str:
+        m = re.search(r"(\d{3,4})", gear_name)
+        if m:
+            return m.group(1) + "p"
+        return gear_name or "未知"
 ```
 
 - [ ] **Step 5: 运行测试确认通过**
 
 Run: `.venv/Scripts/python -m pytest tests/test_douyin.py -v`
-Expected: PASS（5 passed）。
+Expected: PASS（6 passed）。
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: 抖音解析器（短链+ROUTER_DATA+无水印多路清晰度）"
+git commit -m "feat: 抖音解析器（Playwright 拦截 detail API + 无水印多路清晰度）"
 ```
 
-**★ Spike 记录（Task 5 完成后、Task 9 联调前必做）**：用真实抖音链接跑一次
-`.venv/Scripts/python -m pytest tests/test_douyin.py -m network`（网络冒烟），现场确认：
-1. `_ROUTER_DATA` 字段路径与 fixture 是否一致；不一致则更新 fixture 与提取逻辑。
-2. 各清晰度是否单文件合成（决定 is_muxed 取值）。
-3. 哪些直链必须带 Cookie（决定会话复用严格程度）。
-若冒烟测试未建，先用临时脚本抓一个真实页面验证。
+**★ Spike 已全部验证（无需再做）**：
+1. ✅ Playwright + 本地 Edge 加载视频页并拦截 detail API（9 路清晰度 + 真实 CDN 直链）。
+2. ✅ httpx + Referer 直链下载 HTTP 200。
+3. ⏳ 仅剩一项实现时确认：各清晰度是否单文件合成（决定 `is_muxed` 是否要改 False）——用真实视频跑一次下载看能否直接播放验证。
 
 ---
 
