@@ -1,8 +1,10 @@
-// 隔离世界脚本。收 main.js 的消息，构建 Shadow DOM 浮层 UI，发起下载。
+// 隔离世界脚本。收 main.js 的候选视频消息，按当前 URL 匹配正在看的视频，
+// 构建 Shadow DOM 浮层 UI；下载请求转发给 background（chrome.downloads）。
 (() => {
   const MSG = "DY_EXT_MESSAGE";
   const ROOT_ID = "dy-downloader-root";
   let root = null;
+  let candidates = []; // 原始 aweme 条目
   let current = null; // { videoId, title, author, streams }
 
   function qualityLabel(gearName) {
@@ -14,8 +16,24 @@
     return String(name).replace(/[\\/:*?"<>|]/g, "_").trim();
   }
 
-  function extractInfo(data) {
-    const item = data.aweme_detail || {};
+  function currentIdFromUrl() {
+    const q = new URLSearchParams(location.search);
+    if (q.get("modal_id")) return q.get("modal_id");
+    const m = location.pathname.match(/\/video\/(\d+)/);
+    return m ? m[1] : null;
+  }
+
+  function pickCurrent() {
+    if (!candidates.length) return null;
+    const id = currentIdFromUrl();
+    if (id) {
+      const hit = candidates.find((c) => String(c.aweme_id) === id);
+      if (hit) return hit;
+    }
+    return candidates[candidates.length - 1];
+  }
+
+  function toInfo(item) {
     const video = item.video || {};
     const author = item.author || {};
     const streams = [];
@@ -117,9 +135,13 @@
       $(".bar-wrap").classList.remove("hidden");
       $(".bar").style.width = "0%";
       $(".pct").textContent = "0%";
-      window.postMessage(
-        { type: MSG, payload: { kind: "download_request", url: stream.url, filename } },
-        "*"
+      chrome.runtime.sendMessage(
+        { type: "DY_DOWNLOAD", url: stream.url, filename },
+        (resp) => {
+          if (resp && resp.ok === false) {
+            showError("下载失败：" + (resp.error || "未知错误"));
+          }
+        }
       );
     });
 
@@ -143,6 +165,14 @@
     $(".err").classList.add("hidden");
   }
 
+  function showError(msg) {
+    if (!root) return;
+    const shadow = root.shadowRoot;
+    const err = shadow.querySelector(".err");
+    err.textContent = msg;
+    err.classList.remove("hidden");
+  }
+
   function showVideo(info) {
     current = info;
     if (!root) {
@@ -152,29 +182,46 @@
     render();
   }
 
+  function onCandidates(cands) {
+    candidates = cands;
+    const info = toInfo(pickCurrent());
+    if (info && info.videoId) showVideo(info);
+  }
+
+  // 收页面世界消息
   window.addEventListener("message", (ev) => {
     if (!ev.data || ev.data.type !== MSG) return;
     const p = ev.data.payload;
-    if (!p) return;
-    if (p.kind === "video_data") {
-      const info = extractInfo(p.data);
-      if (info.videoId) showVideo(info);
-    } else if (p.kind === "download_progress" && root) {
-      const shadow = root.shadowRoot;
-      const pct = Math.round((p.received / p.total) * 100);
+    if (p && p.kind === "video_candidates") onCandidates(p.candidates);
+  });
+
+  // 收 background 的下载进度/状态
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== "DY_DOWNLOAD_STATUS" || !root) return;
+    const shadow = root.shadowRoot;
+    const p = msg.payload;
+    if (p.kind === "progress") {
+      const pct = p.total ? Math.round((p.received / p.total) * 100) : 0;
       shadow.querySelector(".bar").style.width = pct + "%";
-      shadow.querySelector(".pct").textContent = pct + "%";
-    } else if (p.kind === "download_status" && root) {
-      const shadow = root.shadowRoot;
-      if (p.ok) {
-        shadow.querySelector(".bar").style.width = "100%";
-        shadow.querySelector(".pct").textContent = "完成";
-        setTimeout(() => shadow.querySelector(".bar-wrap").classList.add("hidden"), 1500);
-      } else {
-        const err = shadow.querySelector(".err");
-        err.textContent = "下载失败：" + (p.error || "未知错误");
-        err.classList.remove("hidden");
-      }
+      shadow.querySelector(".pct").textContent = p.total ? pct + "%" : "下载中…";
+    } else if (p.kind === "done") {
+      shadow.querySelector(".bar").style.width = "100%";
+      shadow.querySelector(".pct").textContent = "完成";
+      setTimeout(() => shadow.querySelector(".bar-wrap").classList.add("hidden"), 1500);
+    } else if (p.kind === "error") {
+      shadow.querySelector(".pct").textContent = "失败";
+      showError("下载失败：" + (p.error || "未知错误"));
     }
   });
+
+  // 监听 URL 变化（SPA 切换视频）→ 重新匹配当前视频
+  let lastId = null;
+  setInterval(() => {
+    if (!candidates.length) return;
+    const id = currentIdFromUrl();
+    if (id === lastId) return;
+    lastId = id;
+    const info = toInfo(pickCurrent());
+    if (info && info.videoId) showVideo(info);
+  }, 800);
 })();
