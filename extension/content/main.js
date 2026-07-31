@@ -1,5 +1,5 @@
 // 页面世界脚本（world: MAIN）。hook 页面的 fetch/XHR，拦截含视频数据的 API 响应，
-// 提取候选视频列表发给隔离世界。下载由 background.js 用 chrome.downloads 完成。
+// 提取候选视频列表发给隔离世界；并负责在页面上下文下载视频（fetch→blob→<a download>）。
 (() => {
   const MSG = "DY_EXT_MESSAGE";
   const origFetch = window.fetch;
@@ -73,4 +73,54 @@
     });
     return origSend.apply(this, args);
   };
+
+  // ---- 监听隔离世界的下载请求 ----
+  window.addEventListener("message", (ev) => {
+    if (
+      ev.data &&
+      ev.data.type === MSG &&
+      ev.data.payload &&
+      ev.data.payload.kind === "download_request"
+    ) {
+      downloadVideo(ev.data.payload);
+    }
+  });
+
+  async function downloadVideo(req) {
+    const { url, filename } = req;
+    try {
+      // 关键：credentials 必须用 omit！
+      // 抖音 CDN 返回 Access-Control-Allow-Origin: *，与 include 不兼容会触发 CORS 拦截。
+      const resp = await origFetch(url, { credentials: "omit" });
+      if (!resp.ok) {
+        notify({ kind: "download_status", ok: false, error: "HTTP " + resp.status });
+        return;
+      }
+      const total = parseInt(resp.headers.get("content-length") || "0", 10) || 0;
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (total) notify({ kind: "download_progress", received, total });
+      }
+      const blob = new Blob(chunks, {
+        type: resp.headers.get("content-type") || "video/mp4",
+      });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      notify({ kind: "download_status", ok: true });
+    } catch (e) {
+      notify({ kind: "download_status", ok: false, error: String(e) });
+    }
+  }
 })();

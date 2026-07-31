@@ -132,13 +132,9 @@
       $(".bar-wrap").classList.remove("hidden");
       $(".bar").style.width = "0%";
       $(".pct").textContent = "0%";
-      chrome.runtime.sendMessage(
-        { type: "DY_DOWNLOAD", url: stream.url, filename },
-        (resp) => {
-          if (resp && resp.ok === false) {
-            showError("下载失败：" + (resp.error || "未知错误"));
-          }
-        }
+      window.postMessage(
+        { type: MSG, payload: { kind: "download_request", url: stream.url, filename } },
+        "*"
       );
     });
 
@@ -199,29 +195,28 @@
     shadow.querySelector(".fab").classList.add("hidden");
   }
 
-  // 收页面世界消息
+  // 收页面世界消息（候选 / 下载进度 / 下载状态）
   window.addEventListener("message", (ev) => {
     if (!ev.data || ev.data.type !== MSG) return;
     const p = ev.data.payload;
-    if (p && p.kind === "video_candidates") onCandidates(p.candidates);
-  });
-
-  // 收 background 的下载进度/状态
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (!msg || msg.type !== "DY_DOWNLOAD_STATUS" || !root) return;
-    const shadow = root.shadowRoot;
-    const p = msg.payload;
-    if (p.kind === "progress") {
+    if (!p) return;
+    if (p.kind === "video_candidates") {
+      onCandidates(p.candidates);
+    } else if (p.kind === "download_progress" && root) {
+      const shadow = root.shadowRoot;
       const pct = p.total ? Math.round((p.received / p.total) * 100) : 0;
       shadow.querySelector(".bar").style.width = pct + "%";
       shadow.querySelector(".pct").textContent = p.total ? pct + "%" : "下载中…";
-    } else if (p.kind === "done") {
-      shadow.querySelector(".bar").style.width = "100%";
-      shadow.querySelector(".pct").textContent = "完成";
-      setTimeout(() => shadow.querySelector(".bar-wrap").classList.add("hidden"), 1500);
-    } else if (p.kind === "error") {
-      shadow.querySelector(".pct").textContent = "失败";
-      showError("下载失败：" + (p.error || "未知错误"));
+    } else if (p.kind === "download_status" && root) {
+      const shadow = root.shadowRoot;
+      if (p.ok) {
+        shadow.querySelector(".bar").style.width = "100%";
+        shadow.querySelector(".pct").textContent = "完成";
+        setTimeout(() => shadow.querySelector(".bar-wrap").classList.add("hidden"), 1500);
+      } else {
+        shadow.querySelector(".pct").textContent = "失败";
+        showError("下载失败：" + (p.error || "未知错误"));
+      }
     }
   });
 
