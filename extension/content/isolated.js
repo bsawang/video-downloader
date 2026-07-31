@@ -1,6 +1,7 @@
 // 隔离世界脚本。收 main.js 的候选视频消息，按当前 URL 匹配正在看的视频，
 // 构建 Shadow DOM 浮层 UI；下载请求转发给 background（chrome.downloads）。
 (() => {
+  console.log("[dy-dl] isolated v0.3.1");
   const MSG = "DY_EXT_MESSAGE";
   const ROOT_ID = "dy-downloader-root";
   let root = null;

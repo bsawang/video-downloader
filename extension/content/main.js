@@ -1,6 +1,7 @@
 // 页面世界脚本（world: MAIN）。hook 页面的 fetch/XHR，拦截含视频数据的 API 响应，
 // 提取候选视频列表发给隔离世界；并负责在页面上下文下载视频（fetch→blob→<a download>）。
 (() => {
+  console.log("[dy-dl] main v0.3.1");
   const MSG = "DY_EXT_MESSAGE";
   const origFetch = window.fetch;
 
