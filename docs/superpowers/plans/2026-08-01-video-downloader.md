@@ -81,6 +81,7 @@ testpaths = tests
 ```python
 """全局配置。"""
 import os
+import shutil
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -89,8 +90,23 @@ DOWNLOAD_DIR = BASE_DIR / "downloads"
 HOST = "127.0.0.1"
 PORT = 8000
 
-# ffmpeg 可执行文件路径；未安装时仅影响音视频分离源的合成
-FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "ffmpeg")
+
+def _find_ffmpeg() -> str:
+    """自动探测 ffmpeg：env → PATH → ComfyUI 便携版默认位置。"""
+    env = os.environ.get("FFMPEG_PATH")
+    if env:
+        return env
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    comfy = Path("H:/ComfyUI_Windows_portable/python_standalone/Scripts/ffmpeg.exe")
+    if comfy.exists():
+        return str(comfy)
+    return "ffmpeg"  # 兜底；找不到时由 ffmpeg_tool 报清晰错误
+
+
+# ffmpeg 可执行文件路径；仅对音视频分离源必需，找不到时不影响单文件下载
+FFMPEG_PATH = _find_ffmpeg()
 
 # 每个平台的下载 Referer 头（防盗链用）
 DOWNLOAD_REFERER: dict[str, str] = {
