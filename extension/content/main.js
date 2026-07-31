@@ -1,17 +1,19 @@
 // 页面世界脚本（world: MAIN）。hook 页面的 fetch/XHR，拦截含视频数据的 API 响应，
 // 提取候选视频列表发给隔离世界；并负责在页面上下文下载视频（fetch→blob→<a download>）。
 (() => {
-  console.log("[dy-dl] main v0.3.1");
+  console.log("[dy-dl] main v0.3.2-debug");
   const MSG = "DY_EXT_MESSAGE";
   const origFetch = window.fetch;
+  const DEBUG = true;
+  const log = (...a) => DEBUG && console.log("[dy-dl:main]", ...a);
 
   function notify(payload) {
     window.postMessage({ type: MSG, payload }, "*");
   }
 
-  // 只关心抖音 web API 响应（媒体 URL 不含 aweme/v1/web/）
+  // 放宽：任何含 aweme 的 API 响应都尝试解析（detail/search/feed 都覆盖）
   function isApiUrl(url) {
-    return url.includes("aweme/v1/web/");
+    return url.includes("aweme");
   }
 
   // 从任意 JSON 里提取"含 video 数据"的条目（detail / 搜索 / 推荐流都覆盖）
@@ -44,14 +46,20 @@
       const url =
         typeof args[0] === "string" ? args[0] : (args[0] && args[0].url) || "";
       if (isApiUrl(url)) {
+        log("resp:", url.slice(0, 120));
         resp
           .clone()
           .json()
           .then((data) => {
             const list = extractCandidates(data);
-            if (list.length) notify({ kind: "video_candidates", candidates: list });
+            if (list.length) {
+              log("candidates:", list.length, "ids:", list.map((c) => c.aweme_id).slice(0, 6).join(","));
+              notify({ kind: "video_candidates", candidates: list });
+            } else {
+              log("no candidates in:", url.slice(0, 90));
+            }
           })
-          .catch(() => {});
+          .catch((e) => log("json fail:", url.slice(0, 90), e));
       }
     } catch (e) {}
     return resp;

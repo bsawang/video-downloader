@@ -184,6 +184,9 @@
       const cid = String(c.aweme_id);
       if (!candidates.some((x) => String(x.aweme_id) === cid)) candidates.push(c);
     }
+    const urlId = currentIdFromUrl();
+    console.log("[dy-dl:iso] candidates:", cands.length, "urlId:", urlId,
+      "ids:", candidates.map((c) => c.aweme_id).slice(0, 8).join(","));
     const info = toInfo(pickCurrent());
     if (info && info.videoId) showVideo(info);
     else hideVideo();
