@@ -7,13 +7,13 @@
   "content_scripts": [
     {
       "matches": ["*://*.douyin.com/*"],
-      "js": ["content/main.js"],
+      "js": ["content/main.v035.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
       "matches": ["*://*.douyin.com/*"],
-      "js": ["content/isolated.js"],
+      "js": ["content/isolated.v035.js"],
       "run_at": "document_start"
     }
   ]
