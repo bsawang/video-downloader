@@ -110,6 +110,28 @@ def _find_ffmpeg() -> str:
 # ffmpeg 可执行文件路径；仅对音视频分离源必需，找不到时不影响单文件下载
 FFMPEG_PATH = _find_ffmpeg()
 
+
+def _find_browser_channel() -> str | None:
+    """Playwright 浏览器通道：本地自动用系统 Edge/Chrome（免下载）；
+    服务器（无系统浏览器）返回 None → 用 Playwright 自带 Chromium。"""
+    env = os.environ.get("BROWSER_CHANNEL")
+    if env:
+        return env
+    for path in (
+        Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
+        Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe"),
+        Path("C:/Program Files/Google/Chrome/Application/chrome.exe"),
+        Path("C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"),
+    ):
+        if path.exists():
+            return "msedge" if "Edge" in str(path) else "chrome"
+    return None
+
+
+# Playwright 浏览器通道；None = 使用 Playwright 自带 Chromium（服务器部署时执行
+# `playwright install chromium --with-deps`）
+BROWSER_CHANNEL = _find_browser_channel()
+
 # 每个平台的下载 Referer 头（防盗链用）
 DOWNLOAD_REFERER: dict[str, str] = {
     "douyin": "https://www.douyin.com/",
@@ -591,6 +613,7 @@ import time
 import httpx
 from playwright.sync_api import sync_playwright
 
+import config
 from core.errors import ProviderError
 from core.models import Stream, VideoInfo
 from providers.base import Provider
@@ -660,10 +683,13 @@ class DouyinProvider(Provider):
         return vid
 
     def _fetch_detail(self, video_id: str) -> dict:
-        """Playwright 驱动本地 Edge，拦截 detail API 响应。"""
+        """Playwright 驱动浏览器（本地 Edge/Chrome 或服务器自带 Chromium），拦截 detail API 响应。"""
         captured: dict[str, dict] = {}
         with sync_playwright() as p:
-            browser = p.chromium.launch(channel="msedge", headless=True)
+            launch_kwargs: dict = {"headless": True}
+            if config.BROWSER_CHANNEL:
+                launch_kwargs["channel"] = config.BROWSER_CHANNEL
+            browser = p.chromium.launch(**launch_kwargs)
             try:
                 ctx = browser.new_context(user_agent=UA,
                                           viewport={"width": 1280, "height": 800})
@@ -1850,6 +1876,17 @@ python -m venv .venv
 ## 依赖说明
 
 - ffmpeg 仅对音视频分离的高清源必需（`-c copy` 合成）；未安装时单文件源仍可下载。
+
+## 公网部署（自用）
+
+解析在服务端完成，服务器需装 Playwright 浏览器环境（仅首次）：
+
+```bash
+.venv/bin/python -m playwright install chromium --with-deps
+```
+
+- 本地 Windows 自动用系统 Edge/Chrome（免下载）；Linux 服务器用 Playwright 自带 Chromium。
+- 可用 `BROWSER_CHANNEL` 环境变量强制指定通道（如 `BROWSER_CHANNEL=chrome`），或用 `FFMPEG_PATH` 指定 ffmpeg。
 ```
 
 - [ ] **Step 3: 全量跑通所有测试**
