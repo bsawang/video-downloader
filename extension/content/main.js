@@ -14,7 +14,9 @@
   }
 
   // 从任意 JSON 里提取"含 video 数据"的条目（detail / 搜索 / 推荐流都覆盖）
-  function extractCandidates(data) {
+  // depth 限深，防止深层/循环结构导致栈溢出
+  function extractCandidates(data, depth = 0) {
+    if (depth > 30) return [];
     const list = [];
     const push = (it) => {
       if (it && typeof it === "object" && it.aweme_id && it.video) list.push(it);
@@ -28,7 +30,7 @@
       for (const key of ["aweme_list", "item_list", "data"]) {
         const v = data[key];
         if (Array.isArray(v)) v.forEach(push);
-        else if (v && typeof v === "object") list.push(...extractCandidates(v));
+        else if (v && typeof v === "object") list.push(...extractCandidates(v, depth + 1));
       }
     }
     return list;

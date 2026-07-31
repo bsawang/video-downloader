@@ -31,6 +31,7 @@
   }
 
   function toInfo(item) {
+    if (!item) return null; // pickCurrent 可能返回 null（id 匹配不到候选）
     const video = item.video || {};
     const author = item.author || {};
     const streams = [];
