@@ -2,7 +2,7 @@
 // 同时解析 SSR 内嵌的 script#RENDER_DATA（登录态弹窗视频数据就在这），
 // 提取候选视频列表发给隔离世界；负责在页面上下文下载视频（fetch→blob→<a download>）。
 (() => {
-  console.log("[dy-dl] main v0.4.0");
+  console.log("[dy-dl] main v0.4.1");
   const MSG = "DY_EXT_MESSAGE";
   const origFetch = window.fetch;
   const DEBUG = true;

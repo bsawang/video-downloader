@@ -1,20 +1,24 @@
 {
   "manifest_version": 3,
   "name": "短视频下载器",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "抖音视频无水印下载（无后端，页面内直接下载）",
   "minimum_chrome_version": "111",
+  "permissions": ["webRequest"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["*://*.douyin.com/*"],
-      "js": ["content/main.v040.js"],
+      "js": ["content/main.v041.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": true
     },
     {
       "matches": ["*://*.douyin.com/*"],
-      "js": ["content/isolated.v040.js"],
+      "js": ["content/isolated.v041.js"],
       "run_at": "document_start",
       "all_frames": true
     }

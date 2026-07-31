@@ -1,7 +1,7 @@
 // 隔离世界脚本。收 main.js 的候选视频消息，按当前 URL 匹配正在看的视频，
 // 构建 Shadow DOM 浮层 UI；下载请求转发给 background（chrome.downloads）。
 (() => {
-  console.log("[dy-dl] isolated v0.4.0");
+  console.log("[dy-dl] isolated v0.4.1");
   const MSG = "DY_EXT_MESSAGE";
   const ROOT_ID = "dy-downloader-root";
   let root = null;
@@ -254,6 +254,14 @@
         shadow.querySelector(".pct").textContent = "失败";
         showError("下载失败：" + (p.error || "未知错误"));
       }
+    }
+  });
+
+  // 收后台 webRequest 观察到的视频直链（兜底：任何页面都能拿到正在播放的视频）
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === "DY_VIDEO_URL" && msg.url) {
+      fallbackUrl = msg.url;
+      updateDisplay();
     }
   });
 
