@@ -1,11 +1,12 @@
 // 页面世界脚本（world: MAIN）。hook 页面的 fetch/XHR，拦截含视频数据的 API 响应，
 // 提取候选视频列表发给隔离世界；并负责在页面上下文下载视频（fetch→blob→<a download>）。
 (() => {
-  console.log("[dy-dl] main v0.3.2-debug");
+  console.log("[dy-dl] main v0.3.3-debug");
   const MSG = "DY_EXT_MESSAGE";
   const origFetch = window.fetch;
   const DEBUG = true;
   const log = (...a) => DEBUG && console.log("[dy-dl:main]", ...a);
+  const modalId = new URLSearchParams(location.search).get("modal_id");
 
   function notify(payload) {
     window.postMessage({ type: MSG, payload }, "*");
@@ -14,6 +15,13 @@
   // 放宽：任何含 aweme 的 API 响应都尝试解析（detail/search/feed 都覆盖）
   function isApiUrl(url) {
     return url.includes("aweme");
+  }
+
+  // 调试：定位 modal_id 数据藏在哪个响应里
+  function checkForModalId(url, text) {
+    if (modalId && text && text.includes(modalId)) {
+      log(">>> modal_id FOUND in:", url.slice(0, 150));
+    }
   }
 
   // 从任意 JSON 里提取"含 video 数据"的条目（detail / 搜索 / 推荐流都覆盖）
@@ -60,6 +68,12 @@
             }
           })
           .catch((e) => log("json fail:", url.slice(0, 90), e));
+      } else if (modalId && !url.includes("douyinvod") && !url.includes("byteimg")) {
+        resp
+          .clone()
+          .text()
+          .then((txt) => checkForModalId(url, txt))
+          .catch(() => {});
       }
     } catch (e) {}
     return resp;
@@ -79,6 +93,8 @@
           const data = JSON.parse(this.responseText);
           const list = extractCandidates(data);
           if (list.length) notify({ kind: "video_candidates", candidates: list });
+        } else if (this.__dyUrl && modalId && !this.__dyUrl.includes("douyinvod")) {
+          checkForModalId(this.__dyUrl, this.responseText);
         }
       } catch (e) {}
     });
