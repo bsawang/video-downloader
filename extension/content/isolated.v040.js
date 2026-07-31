@@ -1,12 +1,13 @@
 // 隔离世界脚本。收 main.js 的候选视频消息，按当前 URL 匹配正在看的视频，
 // 构建 Shadow DOM 浮层 UI；下载请求转发给 background（chrome.downloads）。
 (() => {
-  console.log("[dy-dl] isolated v0.3.6");
+  console.log("[dy-dl] isolated v0.4.0");
   const MSG = "DY_EXT_MESSAGE";
   const ROOT_ID = "dy-downloader-root";
   let root = null;
   let candidates = []; // 原始 aweme 条目
   let current = null; // { videoId, title, author, streams }
+  let fallbackUrl = null; // performance 兜底直链（无元数据时的下载源）
 
   function qualityLabel(gearName) {
     const m = String(gearName || "").match(/(\d{3,4})/);
@@ -193,9 +194,31 @@
     const urlId = currentIdFromUrl();
     console.log("[dy-dl:iso] candidates:", cands.length, "urlId:", urlId,
       "ids:", candidates.map((c) => c.aweme_id).slice(0, 8).join(","));
+    updateDisplay();
+  }
+
+  // 兜底：performance 拿到直链，但没有元数据匹配时，用单一路"当前清晰度"下载
+  function showFallback(url) {
+    showVideo({
+      videoId: "fallback",
+      title: "抖音视频",
+      author: "当前播放",
+      streams: [{ label: "当前清晰度", url }],
+    });
+  }
+
+  // 统一显示逻辑：元数据匹配优先，其次兜底直链，都没有则隐藏
+  function updateDisplay() {
     const info = toInfo(pickCurrent());
-    if (info && info.videoId) showVideo(info);
-    else hideVideo();
+    if (info && info.videoId) {
+      showVideo(info);
+      return;
+    }
+    if (fallbackUrl) {
+      showFallback(fallbackUrl);
+      return;
+    }
+    hideVideo();
   }
 
   function hideVideo() {
@@ -213,6 +236,9 @@
     if (!p) return;
     if (p.kind === "video_candidates") {
       onCandidates(p.candidates);
+    } else if (p.kind === "fallback_video" && p.url) {
+      fallbackUrl = p.url;
+      updateDisplay();
     } else if (p.kind === "download_progress" && root) {
       const shadow = root.shadowRoot;
       const pct = p.total ? Math.round((p.received / p.total) * 100) : 0;
@@ -237,8 +263,6 @@
     const id = currentIdFromUrl();
     if (id === lastId) return;
     lastId = id;
-    const info = toInfo(pickCurrent());
-    if (info && info.videoId) showVideo(info);
-    else hideVideo();
+    updateDisplay();
   }, 800);
 })();

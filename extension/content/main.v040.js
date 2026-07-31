@@ -2,7 +2,7 @@
 // 同时解析 SSR 内嵌的 script#RENDER_DATA（登录态弹窗视频数据就在这），
 // 提取候选视频列表发给隔离世界；负责在页面上下文下载视频（fetch→blob→<a download>）。
 (() => {
-  console.log("[dy-dl] main v0.3.7");
+  console.log("[dy-dl] main v0.4.0");
   const MSG = "DY_EXT_MESSAGE";
   const origFetch = window.fetch;
   const DEBUG = true;
@@ -66,16 +66,29 @@
     if (list.length) notify({ kind: "video_candidates", candidates: list });
   }
 
-  // 每 2 秒重扫 RENDER_DATA，并顺带看 performance 里出现的视频直链
-  setInterval(() => {
-    scanRenderData();
+  // 兜底：从 performance 里取最近一次播放的视频直链（任何页面都能拿到）
+  let lastPerfUrl = null;
+  function scanPerfVideo() {
     try {
       const urls = performance
         .getEntriesByType("resource")
         .map((e) => e.name)
-        .filter((u) => u.includes("douyinvod"));
-      if (urls.length) log("perf douyinvod:", urls.length, "|", urls[urls.length - 1].slice(0, 100));
+        .filter((u) => u.includes("douyinvod") && u.includes("/video/"));
+      if (urls.length) {
+        const u = urls[urls.length - 1];
+        if (u !== lastPerfUrl) {
+          lastPerfUrl = u;
+          log("fallback video:", u.slice(0, 110));
+          notify({ kind: "fallback_video", url: u });
+        }
+      }
     } catch (e) {}
+  }
+
+  // 每 2 秒重扫 RENDER_DATA + performance 直链
+  setInterval(() => {
+    scanRenderData();
+    scanPerfVideo();
   }, 2000);
 
   // ---- hook fetch ----
