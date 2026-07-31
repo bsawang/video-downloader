@@ -245,7 +245,7 @@ pending → downloading → done ──→ 文件可在 /api/files/ 获取
 Phase 0  骨架搭建   目录/config/registry/base.py/models.py + FastAPI 空壳
 Phase 1  抖音解析器 短链解析 → _ROUTER_DATA → streams 多路清晰度
                    ★ spike：真实视频验证字段路径 + 音视频分离情况
-Phase 2  下载核心   下载器 + ffmpeg 通道 + 任务管理 + 4 个 API
+Phase 2  下载核心   下载器 + ffmpeg 通道 + 任务管理 + 5 个 API（见第 8 节）
 Phase 3  前端联调   单页 + 静态托管 + 解析→下载→完成 全流程
 Phase 4  收尾测试   fixture 单测补全 + 一键启动脚本 + README
 ```
