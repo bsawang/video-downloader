@@ -5,13 +5,13 @@ const owners = new Map(); // downloadId -> tabId
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "DY_DOWNLOAD") {
     const { url, filename } = msg;
-    const referer = msg.referer || "https://www.douyin.com/";
     const tabId = sender.tab ? sender.tab.id : null;
+    // spike 验证：抖音 CDN 直链带签名时效，不校验 Referer，直接下载即可。
+    // 不能用 chrome.downloads 的 headers 设 Referer（会报 Unsafe request header name）。
     chrome.downloads
       .download({
         url,
         filename,
-        headers: [{ name: "Referer", value: referer }],
         conflictAction: "uniquify",
       })
       .then((id) => {
