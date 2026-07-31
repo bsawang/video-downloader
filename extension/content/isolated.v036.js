@@ -1,7 +1,7 @@
 // 隔离世界脚本。收 main.js 的候选视频消息，按当前 URL 匹配正在看的视频，
 // 构建 Shadow DOM 浮层 UI；下载请求转发给 background（chrome.downloads）。
 (() => {
-  console.log("[dy-dl] isolated v0.3.1");
+  console.log("[dy-dl] isolated v0.3.6");
   const MSG = "DY_EXT_MESSAGE";
   const ROOT_ID = "dy-downloader-root";
   let root = null;
@@ -15,6 +15,12 @@
 
   function sanitize(name) {
     return String(name).replace(/[\\/:*?"<>|]/g, "_").trim();
+  }
+
+  // RENDER_DATA 里的 URL 可能被 % 编码，反解码成可下载的直链
+  function normalizeUrl(u) {
+    if (!u) return u;
+    return u.includes("%") ? decodeURIComponent(u) : u;
   }
 
   function currentIdFromUrl() {
@@ -43,11 +49,11 @@
       const label = qualityLabel(br.gear_name);
       if (seen.has(label)) continue;
       seen.add(label);
-      streams.push({ label, url: urls[0] });
+      streams.push({ label, url: normalizeUrl(urls[0]) });
     }
     if (!streams.length) {
       const urls = (video.play_addr && video.play_addr.url_list) || [];
-      if (urls.length) streams.push({ label: "默认", url: urls[0] });
+      if (urls.length) streams.push({ label: "默认", url: normalizeUrl(urls[0]) });
     }
     return {
       videoId: String(item.aweme_id || ""),

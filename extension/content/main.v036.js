@@ -1,30 +1,23 @@
-// 页面世界脚本（world: MAIN）。hook 页面的 fetch/XHR，拦截含视频数据的 API 响应，
-// 提取候选视频列表发给隔离世界；并负责在页面上下文下载视频（fetch→blob→<a download>）。
+// 页面世界脚本（world: MAIN）。hook 页面的 fetch/XHR，拦截含视频数据的 API 响应；
+// 同时解析 SSR 内嵌的 script#RENDER_DATA（登录态弹窗视频数据就在这），
+// 提取候选视频列表发给隔离世界；负责在页面上下文下载视频（fetch→blob→<a download>）。
 (() => {
-  console.log("[dy-dl] main v0.3.3-debug");
+  console.log("[dy-dl] main v0.3.6");
   const MSG = "DY_EXT_MESSAGE";
   const origFetch = window.fetch;
   const DEBUG = true;
   const log = (...a) => DEBUG && console.log("[dy-dl:main]", ...a);
-  const modalId = new URLSearchParams(location.search).get("modal_id");
 
   function notify(payload) {
     window.postMessage({ type: MSG, payload }, "*");
   }
 
-  // 放宽：任何含 aweme 的 API 响应都尝试解析（detail/search/feed 都覆盖）
+  // 任何含 aweme 的 API 响应都尝试解析（detail/search/feed 都覆盖）
   function isApiUrl(url) {
     return url.includes("aweme");
   }
 
-  // 调试：定位 modal_id 数据藏在哪个响应里
-  function checkForModalId(url, text) {
-    if (modalId && text && text.includes(modalId)) {
-      log(">>> modal_id FOUND in:", url.slice(0, 150));
-    }
-  }
-
-  // 从任意 JSON 里提取"含 video 数据"的条目（detail / 搜索 / 推荐流都覆盖）
+  // 从任意 JSON 里提取"含 video 数据"的条目（detail / 搜索 / 推荐流 / RENDER_DATA 都覆盖）
   // depth 限深，防止深层/循环结构导致栈溢出
   function extractCandidates(data, depth = 0) {
     if (depth > 30) return [];
@@ -47,6 +40,32 @@
     return list;
   }
 
+  // ---- SSR 内嵌数据：script#RENDER_DATA（登录态弹窗视频的关键数据源） ----
+  function parseRenderData() {
+    const el = document.querySelector("script#RENDER_DATA");
+    if (!el || !el.textContent) return null;
+    try {
+      return JSON.parse(el.textContent);
+    } catch (e) {
+      try {
+        return JSON.parse(decodeURIComponent(el.textContent));
+      } catch (e2) {
+        return null;
+      }
+    }
+  }
+
+  function scanRenderData() {
+    const data = parseRenderData();
+    if (!data) return;
+    const list = extractCandidates(data);
+    if (list.length) {
+      log("RENDER_DATA candidates:", list.length,
+        "ids:", list.map((c) => c.aweme_id).slice(0, 6).join(","));
+      notify({ kind: "video_candidates", candidates: list });
+    }
+  }
+
   // ---- hook fetch ----
   window.fetch = async function (...args) {
     const resp = await origFetch.apply(this, args);
@@ -54,25 +73,17 @@
       const url =
         typeof args[0] === "string" ? args[0] : (args[0] && args[0].url) || "";
       if (isApiUrl(url)) {
-        log("resp:", url.slice(0, 120));
         resp
           .clone()
           .json()
           .then((data) => {
             const list = extractCandidates(data);
             if (list.length) {
-              log("candidates:", list.length, "ids:", list.map((c) => c.aweme_id).slice(0, 6).join(","));
+              log("api candidates:", list.length,
+                "ids:", list.map((c) => c.aweme_id).slice(0, 6).join(","));
               notify({ kind: "video_candidates", candidates: list });
-            } else {
-              log("no candidates in:", url.slice(0, 90));
             }
           })
-          .catch((e) => log("json fail:", url.slice(0, 90), e));
-      } else if (modalId && !url.includes("douyinvod") && !url.includes("byteimg")) {
-        resp
-          .clone()
-          .text()
-          .then((txt) => checkForModalId(url, txt))
           .catch(() => {});
       }
     } catch (e) {}
@@ -90,12 +101,13 @@
     this.addEventListener("load", () => {
       try {
         if (this.__dyUrl && isApiUrl(this.__dyUrl)) {
-          log("xhr resp:", this.__dyUrl.slice(0, 120));
           const data = JSON.parse(this.responseText);
           const list = extractCandidates(data);
-          if (list.length) notify({ kind: "video_candidates", candidates: list });
-        } else if (this.__dyUrl && modalId && !this.__dyUrl.includes("douyinvod")) {
-          checkForModalId(this.__dyUrl, this.responseText);
+          if (list.length) {
+            log("xhr candidates:", list.length,
+              "ids:", list.map((c) => c.aweme_id).slice(0, 6).join(","));
+            notify({ kind: "video_candidates", candidates: list });
+          }
         }
       } catch (e) {}
     });
@@ -152,42 +164,6 @@
     }
   }
 
-  // ---- 调试：弹窗视频数据源排查 ----
-  if (modalId) {
-    setTimeout(() => {
-      try {
-        // 1. 扫 <script> 标签，看 modal_id 藏在哪个脚本里
-        const scripts = document.querySelectorAll("script");
-        for (const s of scripts) {
-          const t = s.textContent || "";
-          if (t.includes(modalId)) {
-            log(">>> modal_id in <script> id=", s.id || "-", "type=", s.type || "-", "len=", t.length);
-            const m = t.match(/douyinvod\.com[^"']+/);
-            if (m) log("    douyinvod url in that script:", m[0].slice(0, 130));
-          }
-        }
-        // 2. 轮询所有 video 元素的 src
-        for (let i = 1; i <= 8; i++) {
-          setTimeout(() => {
-            try {
-              const vs = document.querySelectorAll("video");
-              log("videos[" + i + "s]:", vs.length,
-                Array.from(vs).map((v) => (v.currentSrc || v.src || "").slice(0, 50)));
-            } catch (e) {}
-          }, i * 1000);
-        }
-        // 3. 扫 performance 里加载过的 douyinvod 资源
-        setTimeout(() => {
-          try {
-            const urls = performance
-              .getEntriesByType("resource")
-              .map((e) => e.name)
-              .filter((u) => u.includes("douyinvod"));
-            log("douyinvod resources:", urls.length);
-            urls.slice(0, 3).forEach((u) => log("   ", u.slice(0, 120)));
-          } catch (e) {}
-        }, 9000);
-      } catch (e) {}
-    }, 1500);
-  }
+  // RENDER_DATA 是 SSR 内嵌，页面加载后轮询几次即可拿到弹窗视频
+  [800, 2000, 4000].forEach((ms) => setTimeout(scanRenderData, ms));
 })();
