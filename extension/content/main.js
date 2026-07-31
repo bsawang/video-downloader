@@ -156,17 +156,38 @@
   if (modalId) {
     setTimeout(() => {
       try {
-        const html = document.documentElement.outerHTML;
-        if (html.includes(modalId)) log(">>> modal_id FOUND in DOM html");
-        for (const key of ["__INITIAL_STATE__", "_ROUTER_DATA", "__PRELOADED_STATE__", "SIGI_STATE"]) {
-          try {
-            const v = window[key];
-            if (v && JSON.stringify(v).includes(modalId)) log(">>> modal_id FOUND in window." + key);
-          } catch (e) {}
+        // 1. 扫 <script> 标签，看 modal_id 藏在哪个脚本里
+        const scripts = document.querySelectorAll("script");
+        for (const s of scripts) {
+          const t = s.textContent || "";
+          if (t.includes(modalId)) {
+            log(">>> modal_id in <script> id=", s.id || "-", "type=", s.type || "-", "len=", t.length);
+            const m = t.match(/douyinvod\.com[^"']+/);
+            if (m) log("    douyinvod url in that script:", m[0].slice(0, 130));
+          }
         }
-        const v = document.querySelector("video");
-        if (v && v.currentSrc) log("video.currentSrc:", v.currentSrc.slice(0, 130));
+        // 2. 轮询所有 video 元素的 src
+        for (let i = 1; i <= 8; i++) {
+          setTimeout(() => {
+            try {
+              const vs = document.querySelectorAll("video");
+              log("videos[" + i + "s]:", vs.length,
+                Array.from(vs).map((v) => (v.currentSrc || v.src || "").slice(0, 50)));
+            } catch (e) {}
+          }, i * 1000);
+        }
+        // 3. 扫 performance 里加载过的 douyinvod 资源
+        setTimeout(() => {
+          try {
+            const urls = performance
+              .getEntriesByType("resource")
+              .map((e) => e.name)
+              .filter((u) => u.includes("douyinvod"));
+            log("douyinvod resources:", urls.length);
+            urls.slice(0, 3).forEach((u) => log("   ", u.slice(0, 120)));
+          } catch (e) {}
+        }, 9000);
       } catch (e) {}
-    }, 6000);
+    }, 1500);
   }
 })();
