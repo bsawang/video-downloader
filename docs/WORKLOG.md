@@ -11,32 +11,43 @@
 
 **2026-08-01 重大进展**：**登录态搜索 → 下载已打通**（`spikes/search.py`）。之前误判"搜索被软风控返回空"，真相是搜索接口是流式帧格式 + `data[].aweme_info` 嵌套，解析方式不对。登录态复用（`spikes/login.py` + `spikes/run.py --profile`）。
 
-## 二、插件 v0.4.2（可用的部分）
+## 二、插件 v0.5.2（可用部分）
 
 ### 文件结构（`extension/`）
 ```
 extension/
 ├── manifest.json              # MV3，2 个 content script，all_frames: true
 └── content/
-    ├── main.v042.js           # 页面世界（world: MAIN）：hook fetch/XHR + 解析 RENDER_DATA + performance 兜底 + 下载
-    └── isolated.v042.js       # 隔离世界：候选匹配 + Shadow DOM 浮层 UI + 下载请求转发
+    ├── main.v05.js            # 页面世界：通用视频提取（所有 fetch/XHR 响应递归找 video.bit_rate）+ RENDER_DATA + 下载
+    └── isolated.v05.js        # 隔离世界：多锚点匹配 + 视频上叠下载按钮（hover 显示 + 清晰度 popover）
 ```
 
 ### 工作流程
 ```
-① main.js hook 页面的 fetch/XHR，拦截含 aweme 的 API 响应
-   → extractCandidates() 递归提取 {aweme_id, video} 条目 → postMessage 发给隔离世界
-② 同时解析 script#RENDER_DATA（SSR 内嵌数据），同样提取候选
-③ isolated.js 累计候选（按 aweme_id 去重），用 URL 的 modal_id 或 /video/{id} 严格匹配当前视频
-   → 匹配到 → 显示标题/作者/多清晰度；匹配不到但有 performance 直链 → 兜底"当前清晰度"
-④ 点下载 → isolated postMessage download_request → main.js 用 fetch(credentials:"omit") 拿视频
-   → 转 blob → <a download> 存本地
+① main 通用视频提取：hook 所有 fetch/XHR → 响应 text() 逐行解析（兼容流式帧）→ 递归找
+   含 aweme_id + video.bit_rate 的条目 → 精简（过滤 adapt/pay/hdr，标准化清晰度）→ 转发
+② isolated 收候选进 Map（aweme_id → 标题/作者/多清晰度直链）
+③ 多锚点扫描页面元素（aweme_id 作为 DOM 属性值，不依赖混淆 class）：
+   · [data-aweme-id]        首页/精选页 discover-video-card-item
+   · [id^="waterfall_item_"] 搜索/推荐列表页
+   · [class*="video_"]      详情页播放器容器
+   任一命中 → 查 Map → 命中 → 叠下载按钮（hover 显示）
+④ 点按钮 → fixed 清晰度 popover → 选清晰度 → postMessage download_request → main fetch(credentials:"omit") → 下载
 ```
 
-### ✅ 已验证可靠（Playwright 端到端实测）
-- **直接视频页** `/video/{id}`：完整标题 + 多清晰度 + 无水印下载
-- 首页/推荐视频：用户确认可用
-- 退出登录的搜索弹窗：用户确认可用
+### ✅ 已验证可靠（会话式实测 2026-08-01）
+- **首页**（精选页）：46 卡片 **46 图标全渲染**（data-aweme-id 锚点），hover none→block，popover 1080p/720p/540p
+- **搜索结果页**：20 卡片 8 图标（waterfall_item 锚点），hover + popover + 下载 **210MB 落盘**
+- **详情页**：`⬇ 下载` 大按钮（video_ 锚点），popover + 下载 5.2MB 落盘
+- 全站统一"视频上叠按钮"交互（无 FAB）
+
+### 关键实现要点（勿重复踩）
+- **匹配规律 = 多锚点扫描（aweme_id 作为 DOM 属性值）**，不要依赖单一混淆 class（ZH8C4ExR 等随时会变）
+- **瀑布流卡片根是 absolute 定位，绝不能改它的 position**——按钮挂卡片内部 `.videoImage`（本来就是 relative）
+- 按钮 hover 才显示（default none）；popover 用 `fixed` 定位（不依赖卡片定位上下文）
+- 通用视频提取用 `resp.text()` 逐行解析（流式帧），不能 `resp.json()`
+- 精简转发候选（只传 aweme_id/标题/作者/清晰度直链），避免 postMessage 塞大量完整对象
+- `driver.py start --extension` 加载插件到常驻浏览器 → session.py/dev.py 会话式验证真实环境（不用每次冷启动）
 
 ## 三、技术发现与踩坑（重要，勿重复踩）
 
@@ -85,10 +96,18 @@ extension/
 - [ ] 移除插件里的调试日志（`RENDER_DATA script: NOT FOUND` 等每 2 秒一条太吵），或加开关
 - [ ] 兜底模式体验：现在只显示"当前清晰度"，可考虑匹配 performance 直链与元数据
 
-### 中期（登录态搜索浮窗）— 后端 Playwright 层已打通，插件层仍受限
-- **后端/Playwright 层**：登录态搜索 → 下载已通（`spikes/search.py`，见第三节第 7 条）
-- **插件层**（用户浏览器内）：登录态搜索**弹窗**视频仍受限（页面 SW，扩展看不见）。但插件在**退出登录**搜索场景可用。真·弹窗穿透仍靠后端版。
-- `chrome.debugger` API 可穿透 SW，但要常驻调试+提示条，脆弱，不推荐
+### 中期（登录态搜索下载）— 插件 v0.5 已验证可行（2026-08-01 突破）
+- **关键新发现**：登录态搜索结果接口 `general/search/stream` **不走 SW**（是普通页面 fetch，实测页面 main world fetch hook 能拦截），且**结果自带直链**（`aweme_info.bit_rate`）→ **插件也能做登录态搜索下载，不需要后端、不需要穿透 SW**
+- 之前"受限"特指登录态搜索**弹窗 detail**（走 SW）——但下载不依赖 detail，用搜索结果列表直链即可
+- **插件 v0.5 方案已在页面实测通过**（决定性验证 2026-08-01）：
+  1. **通用视频提取 hook（不挑接口）**：hook 所有 fetch + XHR 响应 → 递归提取含 `aweme_id + video.bit_rate` 的对象 → 入库全局 Map（85 条，覆盖搜索结果 + 推荐流 + 首页推荐所有数据流）
+  2. **卡片锚点：`#waterfall_item_{aweme_id}`**（视频卡片 div 的 id 直接含视频 id，稳定；比 `[href*="/video/"]` 可靠，后者时有时无）
+  3. **匹配率 85%**（20 卡片 17 匹配；剩余为图文笔记/无视频直链，本就不该有下载图标）
+  4. 图标渲染：挂到卡片内部 `.videoImage`（本来就是 relative），**绝不改卡片根 position**（瀑布流卡片根是 absolute，改了会破坏瀑布流布局——已踩坑）
+  5. 动态 redraw：MutationObserver 监听新卡片 + 数据到达自动补图标
+- 关键：搜索结果接口只返回 ~8 条，页面其余是推荐流（另一个接口）→ 必须用**通用视频提取**而非只 hook `general/search`
+- 截图：`spikes/out/out_v05_icons_fixed.png`、`out_v05_universal.png`；验证片段 `spikes/snippets/`（step2b/step4b/step5/step6）
+- 边界：直接 goto `/search/关键词` URL **不渲染结果**（登录墙/风控），必须**从页面内触发搜索**（SPA 状态完整）→ 插件只需"被动"在真实搜索结果页工作
 
 ### 二期（Web/后端版，已有完整设计）
 - `docs/superpowers/specs/2026-08-01-video-downloader-design.md`（设计）

@@ -56,7 +56,7 @@ def cdp_ready(port=PORT):
         return False
 
 
-def start(port=PORT):
+def start(port=PORT, extension=False):
     if cdp_ready(port):
         print(f"常驻浏览器已在运行 (port {port})")
         return 0
@@ -74,6 +74,10 @@ def start(port=PORT):
         "--start-maximized",
         "https://www.douyin.com/",
     ]
+    if extension:
+        EXT = ROOT / "extension"
+        cmd.extend([f"--disable-extensions-except={EXT}", f"--load-extension={EXT}"])
+        print("加载插件:", EXT)
     print("启动常驻 Edge:", edge)
     subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -129,9 +133,10 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["start", "stop", "status"])
     ap.add_argument("--port", type=int, default=PORT)
+    ap.add_argument("--extension", action="store_true", help="加载插件 extension/（真实环境验证）")
     args = ap.parse_args()
     if args.cmd == "start":
-        return start(args.port)
+        return start(args.port, extension=args.extension)
     if args.cmd == "status":
         return status(args.port)
     return stop(args.port)
