@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "短视频下载器",
-  "version": "0.5.0",
-  "description": "抖音视频无水印下载（无后端，页面内直接下载；搜索/推荐列表页卡片图标 + 单视频浮层）",
+  "version": "0.5.2",
+  "description": "抖音视频无水印下载（无后端，页面内直接下载；全站视频上叠按钮：hover + 清晰度选择）",
   "minimum_chrome_version": "111",
   "content_scripts": [
     {
@@ -14,7 +14,7 @@
     },
     {
       "matches": ["*://*.douyin.com/*"],
-      "js": ["content/isolated.v05.js"],
+      "js": ["content/isolated.v054.js"],
       "run_at": "document_start",
       "all_frames": true
     }

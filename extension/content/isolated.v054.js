@@ -48,6 +48,15 @@
       const m = String(el.className).match(/video_(\d+)/);
       if (m) add(el, m[1]);
     });
+    // 单列大视频流：从正在播放的 video 直链 __vid 匹配（视频播放后 src 才有值）
+    document.querySelectorAll("video").forEach((v) => {
+      const src = v.currentSrc || v.src || "";
+      const m = src.match(/__vid=(\d+)/);
+      if (m) {
+        const el = v.closest(".douyin-player-video-container") || v.closest(".basePlayerContainer") || v.parentElement;
+        if (el) add(el, m[1]);
+      }
+    });
     return found;
   }
 
@@ -91,7 +100,9 @@
 
   // ---- 渲染：扫描所有卡片，命中候选则叠按钮 ----
   function renderAll() {
-    for (const { el, id } of scanCards()) {
+    const found = scanCards();
+    let mounted = 0;
+    for (const { el, id } of found) {
       if (rendered.has(el)) continue;
       let data = candidates.get(id);
       if (!data || !data.streams || !data.streams.length) {
@@ -103,8 +114,11 @@
       }
       mountButton(el, data);
       rendered.add(el);
+      mounted++;
     }
+    return mounted;
   }
+  window.__dlRender = renderAll;
 
   // ============================================================
   // popover / 下载 / toast
