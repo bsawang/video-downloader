@@ -4,9 +4,21 @@
 
 覆盖首页 / 频道栏目 / 搜索结果（多列 + 单列大视频流）/ 视频详情页，全站统一"视频上 hover 出下载按钮 → 弹清晰度菜单 → 下载"。
 
+## 支持平台
+
+| 项目 | 支持情况 |
+|---|---|
+| **浏览器** | Google Chrome、Microsoft Edge（Chromium 内核）✅ |
+| | 其他 Chromium 内核（Opera / Brave / 360 极速等）✅ 理论上可用 |
+| | Firefox、Safari ❌ 未适配 |
+| **浏览器版本** | Chrome / Edge **111+**（MV3 + 扩展 API 要求） |
+| **适用网站** | 抖音 **www.douyin.com**（精选首页 / 频道栏目 / 搜索 / 详情页） |
+| **系统** | Windows / macOS / Linux（浏览器插件，跨平台） |
+| **登录要求** | 建议已登录抖音（未登录部分页面无数据可下载） |
+
 ## 下载安装
 
-**方式一：安装包（推荐）**
+**方式一：安装包（推荐，给使用者）**
 
 从 [Releases](../../releases) 下载最新 `video-downloader-v*.crx`：
 
@@ -17,7 +29,7 @@
 
 > 也可用 `.zip`：解压 → chrome://extensions → **加载已解压的扩展程序** → 选解压目录。
 
-**方式二：源码加载**
+**方式二：源码加载（给开发者）**
 
 ```bash
 git clone https://github.com/bsawang/video-downloader.git
