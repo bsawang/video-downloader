@@ -2,17 +2,13 @@
 
 抖音视频**无水印下载**（无后端，页面内直接下载）。MV3 浏览器扩展，全站统一"视频上叠下载按钮"交互。
 
-## 支持平台
+## 支持方式与平台
 
-| 项目 | 支持情况 |
-|---|---|
-| **浏览器** | Google Chrome、Microsoft Edge（Chromium 内核）✅ |
-| | 其他 Chromium 内核（Opera / Brave 等）✅ 理论上可用 |
-| | Firefox、Safari ❌ 未适配 |
-| **浏览器版本** | Chrome / Edge **111+** |
-| **适用网站** | 抖音 **www.douyin.com**（精选 / 栏目 / 搜索 / 详情页） |
-| **系统** | Windows / macOS / Linux（跨平台） |
-| **登录要求** | 建议已登录抖音（未登录部分页面无数据） |
+**方式**（产品形态）：extension（本插件）✅ 可用；web（网页版）⏳ 规划中。
+
+**平台**（内容网站）：抖音 ✅ 支持；小红书 / B站 / YouTube ⏳ 规划中。
+
+**环境要求**：Chrome / Edge（Chromium 内核）**111+**；Firefox / Safari 未适配；Windows / macOS / Linux 通用；建议已登录抖音。
 
 ## 功能特性
 
