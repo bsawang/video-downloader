@@ -28,9 +28,10 @@ extension/
    含 aweme_id + video.bit_rate 的条目 → 精简（过滤 adapt/pay/hdr，标准化清晰度）→ 转发
 ② isolated 收候选进 Map（aweme_id → 标题/作者/多清晰度直链）
 ③ 多锚点扫描页面元素（aweme_id 作为 DOM 属性值，不依赖混淆 class）：
-   · [data-aweme-id]        首页/精选页 discover-video-card-item
-   · [id^="waterfall_item_"] 搜索/推荐列表页
-   · [class*="video_"]      详情页播放器容器
+   · [data-aweme-id]           首页/精选页 discover-video-card-item
+   · [id^="waterfall_item_"]   搜索/推荐列表页
+   · [class*="video_"]         详情页播放器容器
+   · video 直链 __vid         单列大视频流（播放后 src 才有值，用户已确认）
    任一命中 → 查 Map → 命中 → 叠下载按钮（hover 显示）
 ④ 点按钮 → fixed 清晰度 popover → 选清晰度 → postMessage download_request → main fetch(credentials:"omit") → 下载
 ```
