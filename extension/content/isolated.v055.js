@@ -1,14 +1,15 @@
-// 隔离世界脚本 v0.5.2。统一"视频上叠下载按钮"机制（迅雷式）。
+// 隔离世界脚本 v0.5.5。统一"视频上叠下载按钮"机制（迅雷式）。
 //
 // 匹配规律：不依赖单一页面 class/id，用**多锚点扫描**（aweme_id 作为 DOM 属性值）：
 //   ① [data-aweme-id]      （首页/精选页 discover-video-card-item）
 //   ② [id^="waterfall_item_"]（搜索/推荐列表页）
 //   ③ [class*="video_"]     （详情页播放器容器）
+//   ④ /user/ 个人主页 scroll-list 内 a[href*="/video/{id}"]（作品/喜欢/收藏三 tab 统一结构）
 // 任一命中 → 查 candidates Map（main 通用提取来的数据）→ 命中则叠下载按钮。
-// 按钮 hover 才显示，点击弹清晰度 popover。挂载到卡片内部定位上下文（.videoImage 或自身非 static），
-// 绝不改宿主元素 position（瀑布流卡片根是 absolute，改了破坏布局）。
+// 按钮 hover 才显示，点击弹清晰度 popover。挂载到卡片内部定位上下文（.videoImage 或自身非 static，
+// 或内部视频链接），绝不改宿主元素 position（瀑布流卡片根是 absolute，改了破坏布局）。
 (() => {
-  console.log("[dy-dl] isolated v0.5.2");
+  console.log("[dy-dl] isolated v0.5.5");
   const MSG = "DY_EXT_MESSAGE";
   const candidates = new Map(); // aweme_id → {title, author, streams:[{label,url}]}
   const rendered = new WeakSet(); // 已渲染按钮的元素
@@ -48,6 +49,16 @@
       const m = String(el.className).match(/video_(\d+)/);
       if (m) add(el, m[1]);
     });
+    // 个人主页 作品/喜欢/收藏 三 tab：ul[data-e2e="scroll-list"] 内 li 卡片，
+    // 卡片根是 static 且无 data-aweme-id，视频 id 藏在内部 a[href*="/video/{id}"]。
+    if (/^\/user\//.test(location.pathname)) {
+      document.querySelectorAll('ul[data-e2e="scroll-list"] > li').forEach((el) => {
+        const a = el.querySelector('a[href*="/video/"]');
+        if (!a) return;
+        const m = String(a.getAttribute("href") || "").match(/\/video\/(\d+)/);
+        if (m) add(el, m[1]);
+      });
+    }
     // 单列大视频流：从正在播放的 video 直链 __vid 匹配（视频播放后 src 才有值）
     document.querySelectorAll("video").forEach((v) => {
       const src = v.currentSrc || v.src || "";
@@ -65,10 +76,15 @@
   }
 
   function mountButton(el, data) {
-    // 挂载锚点：内部封面容器优先，否则元素自身（若已是定位上下文）
+    // 挂载锚点：内部封面容器优先，否则元素自身（若已是定位上下文），
+    // 否则回退到内部视频链接 a[href*="/video/"]（个人主页卡片根是 static，链接本身是 relative）。
     const anchor =
       el.querySelector(".videoImage") ||
-      (getComputedStyle(el).position !== "static" ? el : null);
+      (getComputedStyle(el).position !== "static" ? el : null) ||
+      (() => {
+        const a = el.querySelector('a[href*="/video/"]');
+        return a && getComputedStyle(a).position !== "static" ? a : null;
+      })();
     if (!anchor) return;
 
     const isDetail = isDetailContainer(el);

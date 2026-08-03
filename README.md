@@ -2,7 +2,7 @@
 
 抖音视频**无水印下载**浏览器插件（无后端，页面内直接下载）。
 
-覆盖首页 / 频道栏目 / 搜索结果（多列 + 单列大视频流）/ 视频详情页，全站统一"视频上 hover 出下载按钮 → 弹清晰度菜单 → 下载"。
+覆盖首页 / 频道栏目 / 搜索结果（多列 + 单列大视频流）/ 视频详情页 / **个人主页（作品/喜欢/收藏三 tab）**，全站统一"视频上 hover 出下载按钮 → 弹清晰度菜单 → 下载"。
 
 ## 支持方式与平台
 
@@ -72,7 +72,7 @@ git clone https://github.com/bsawang/video-downloader.git
 ```
 extension/          插件本体（MV3，加载/打包用这个目录）
   content/main.v05.js      页面世界：通用视频提取 + 下载
-  content/isolated.v054.js 隔离世界：多锚点匹配 + hover 按钮 + 清晰度菜单
+  content/isolated.v055.js 隔离世界：多锚点匹配 + hover 按钮 + 清晰度菜单
 build.py           打包脚本（生成 .crx / .zip 安装文件）
 spikes/            开发/测试工具（登录、搜索、常驻浏览器会话式测试）
 docs/WORKLOG.md    工作日志（技术发现、避坑、规划）
@@ -81,5 +81,5 @@ docs/WORKLOG.md    工作日志（技术发现、避坑、规划）
 ## 技术要点
 
 - **通用视频提取**：hook 所有 fetch/XHR，`text()` 逐行解析（兼容流式帧），递归找 `aweme_id + video.bit_rate`
-- **多锚点匹配**：`[data-aweme-id]` / `[id^="waterfall_item_"]` / `[class*="video_"]` / video 直链 `__vid`，不依赖页面混淆 class
+- **多锚点匹配**：`[data-aweme-id]` / `[id^="waterfall_item_"]` / `[class*="video_"]` / video 直链 `__vid` / 个人主页 `ul[data-e2e="scroll-list"] > li` 内 `a[href*="/video/{id}"]`，不依赖页面混淆 class
 - **无水印下载**：页面内 `fetch(url, { credentials: "omit" })` → blob → `<a download>`（CDN 的 `ACAO:*` 与 include 不兼容，必须 omit）

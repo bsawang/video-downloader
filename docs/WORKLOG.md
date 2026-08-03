@@ -1,17 +1,19 @@
 # 短视频下载器 · 工作日志
 
 > 用途：记录项目当前状态、技术发现、未解决问题，供后续会话直接接续。
-> 最后更新：2026-08-01
+> 最后更新：2026-08-03
 
 ## 一、当前状态总览
 
-**产品方向**：自研解析的短视频下载工具。已实现 **浏览器插件（无后端模式）v0.4.2**；Python 后端 Web 版（FastAPI + Playwright）设计完毕待实施（见 `docs/superpowers/specs/` 与 `plans/`）。
+**产品方向**：自研解析的短视频下载工具。已实现 **浏览器插件（无后端模式）v0.5.3**；Python 后端 Web 版（FastAPI + Playwright）设计完毕待实施（见 `docs/superpowers/specs/` 与 `plans/`）。
 
 **重要决策**：**抖音必须首发**，不要再建议先做其他平台（见记忆 `douyin-first-priority`）。插件先做无后端模式，Web 版为第二步。
 
 **2026-08-01 重大进展**：**登录态搜索 → 下载已打通**（`spikes/search.py`）。之前误判"搜索被软风控返回空"，真相是搜索接口是流式帧格式 + `data[].aweme_info` 嵌套，解析方式不对。登录态复用（`spikes/login.py` + `spikes/run.py --profile`）。
 
-## 二、插件 v0.5.2（可用部分）
+**2026-08-03 重大进展**：**个人主页作品/喜欢/收藏三 tab 下载已打通**（v0.5.3）。此前锚点扫描不认识主页卡片（`ul[data-e2e="scroll-list"] > li`，无 data-aweme-id），0 图标；数据管线其实早就通了（main world 通用提取走 XHR 抓全 53 条候选），只缺隔离世界锚点。已加锚点 + 挂载回退，三 tab 全覆盖（见下）。
+
+## 二、插件 v0.5.3（可用部分）
 
 ### 文件结构（`extension/`）
 ```
@@ -19,7 +21,7 @@ extension/
 ├── manifest.json              # MV3，2 个 content script，all_frames: true
 └── content/
     ├── main.v05.js            # 页面世界：通用视频提取（所有 fetch/XHR 响应递归找 video.bit_rate）+ RENDER_DATA + 下载
-    └── isolated.v05.js        # 隔离世界：多锚点匹配 + 视频上叠下载按钮（hover 显示 + 清晰度 popover）
+    └── isolated.v055.js       # 隔离世界：多锚点匹配 + 视频上叠下载按钮（hover 显示 + 清晰度 popover）
 ```
 
 ### 工作流程
@@ -32,6 +34,7 @@ extension/
    · [id^="waterfall_item_"]   搜索/推荐列表页
    · [class*="video_"]         详情页播放器容器
    · video 直链 __vid         单列大视频流（播放后 src 才有值，用户已确认）
+   · /user/ 个人主页          ul[data-e2e="scroll-list"] > li 内 a[href*="/video/{id}"]（作品/喜欢/收藏统一）
    任一命中 → 查 Map → 命中 → 叠下载按钮（hover 显示）
 ④ 点按钮 → fixed 清晰度 popover → 选清晰度 → postMessage download_request → main fetch(credentials:"omit") → 下载
 ```
@@ -42,9 +45,17 @@ extension/
 - **详情页**：`⬇ 下载` 大按钮（video_ 锚点），popover + 下载 5.2MB 落盘
 - 全站统一"视频上叠按钮"交互（无 FAB）
 
+### ✅ 个人主页三 tab 已验证（会话式实测 2026-08-03）
+- **作品 tab**（`user/self?showTab=record`）：43 卡片 **36 图标**（余 7 为图文笔记/无视频直链，本就不该有图标）
+- **喜欢 tab**（`showTab=like`）：60 卡片 **59 图标**
+- **收藏 tab**（`showTab=favorite_collection`）：37 卡片 **35 图标**
+- 每 tab hover 出图标 → popover 1440p/1080p/540p/720p → 选择即下载（Playwright expect_download 抓到真实文件 3.1MB 落盘）
+- **关键发现**：主页视频数据走 **XHR**（不是 fetch）→ main world 通用提取早就抓到 53 条候选；隔离世界缺锚点才 0 图标。fetch-only 探针看不到，别被误导
+
 ### 关键实现要点（勿重复踩）
 - **匹配规律 = 多锚点扫描（aweme_id 作为 DOM 属性值）**，不要依赖单一混淆 class（ZH8C4ExR 等随时会变）
 - **瀑布流卡片根是 absolute 定位，绝不能改它的 position**——按钮挂卡片内部 `.videoImage`（本来就是 relative）
+- **个人主页卡片根是 static 且无 `.videoImage`** → `mountButton` 挂载锚点加第三级回退：`a[href*="/video/"]`（本身 relative）
 - 按钮 hover 才显示（default none）；popover 用 `fixed` 定位（不依赖卡片定位上下文）
 - 通用视频提取用 `resp.text()` 逐行解析（流式帧），不能 `resp.json()`
 - 精简转发候选（只传 aweme_id/标题/作者/清晰度直链），避免 postMessage 塞大量完整对象
@@ -157,6 +168,13 @@ extension/
 ```
 - 需要先登录（login.py）。下载走 httpx 直链（Referer + UA）到 `downloads/`。
 - 解析要点：搜索响应是流式帧（`hex长度\nJSON\n`）+ `data[].aweme_info` 嵌套，见第三节第 7 条。
+
+### ✅ 个人主页数据流探针（`spikes/probe_profile.py`）— 诊断主页 XHR/插件消息/锚点
+```bash
+.venv/Scripts/python spikes/probe_profile.py   # 需先 driver.py start --extension
+```
+- 连接常驻浏览器 + init-script 探针（跨 reload 存活）：统计页面 world fetch 见到的 bit_rate 响应、插件 video_candidates 消息、卡片↔候选覆盖率、按钮数。
+- **教训**：主页数据走 XHR 不走 fetch，只 hook fetch 的探针会误判"数据没通"（实际 main world 双 hook 早就抓到）。
 
 ### ✅ 统一测试 runner（`spikes/run.py`）— 日常测试走这个，别再用零散脚本
 三种模式，一条命令拿结论，输出统一到 `spikes/out/run_<时间戳>_<模式>/`（result.json + page.png）：
