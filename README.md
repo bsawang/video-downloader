@@ -34,7 +34,7 @@
 
 **方式一：安装包（推荐，给使用者）**
 
-从 [Releases](../../releases) 下载最新 `video-downloader-v*.crx`：
+从 [Releases](./releases) 下载最新 `video-downloader-v*.crx`：
 
 1. 打开 `chrome://extensions`（Edge 用 `edge://extensions`）
 2. 右上角开启**开发者模式**
