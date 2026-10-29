@@ -19,18 +19,19 @@
 | M6.1 | ✅ | 批次 1 |
 | M3.3 | ✅ | 批次 2 |
 
-## 分发 v0.7.0 ✅ 本地就绪 · 待发 Release  {spec §M6.1 分发字段 + 待定项 #1 已定案}
+## 分发 v0.7.0 ✅ 已发版  {spec §M6.1 分发字段 + 待定项 #1 已定案}
 - 版本：`package.json` 0.6.0 → **0.7.0**（M3.3 为新功能，走 minor），构建头版本只来自 `package.json`
 - 更新源：`tools/build.mjs` 新增常量 `UPDATE_URL`，头里写 `@updateURL`/`@downloadURL`，同指 `https://github.com/bsawang/video-downloader/releases/latest/download/douyin.user.js`
 
 ### 证据（本轮实跑）
 - `npm run build` → `dist/douyin.user.js` 20.0 KB；`node --check` 通过；头为 `@version 0.7.0` + `@updateURL` + `@downloadURL`
 - `npm test` → 26 pass / 0 fail
-- `curl -sIL https://github.com/bsawang/video-downloader/releases/latest/download/douyin.user.js` → `404`（别名已解析到 `releases/download/v0.5.2/`，该 release 只有 `.crx`/`.zip`，无同名脚本资产）
+- `git push origin main` → `1e484eb..8a94fe0`
+- `gh release create v0.7.0` → https://github.com/bsawang/video-downloader/releases/tag/v0.7.0；资产 `douyin.user.js` 21 155 B、`video-downloader-v0.5.3.crx`、`video-downloader-v0.5.3.zip`；`gh api .../releases/latest` → `v0.7.0`（插件安装包仍可从 Releases 取）
+- 固定别名 `curl -sL .../releases/latest/download/douyin.user.js` → `200`、21 155 B，sha256 与本地 `dist/douyin.user.js` 全等（`eccc6a16…c03c`）
 
 ### 待办
-- 新建 release（`gh release create v0.7.0 dist/douyin.user.js`）后别名才可用；资产名必须是 `douyin.user.js`
-- 从本地文件 / 拖拽安装的旧脚本没有更新源，用户需改从上述固定链接重装一次
+- 从本地文件 / 拖拽安装的旧脚本没有更新源，需从固定别名链接重装一次才进入自动更新轨道（同名同 `@namespace` 会显示「更新」）
 
 ## 批次 2 ✅ 已归档  {spec §M3.3}
 覆盖：M3.3 → 详情弹层「作者作品」列表锚点 + DOM(fiber) 数据源
