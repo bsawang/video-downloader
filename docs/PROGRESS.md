@@ -25,6 +25,7 @@
 - 证据（真页 CDP，用户 Chrome inspect 长连接，注入新构建）：面板开 → `basePlayerContainer` 1371 宽、按钮 `1271–1355`；面板关 → 1920 宽、按钮 `1820–1904`；截图确认按钮位于播放器右下、面板左侧
 - 单测：`npm test` 28 pass / 0 fail（新增 `pickAnchor` 选播放器容器、详情规则 mount 顺序两例）
 - 版本：0.7.0 → 0.7.1
+- 发版：`gh release create v0.7.1`（脚本 + 插件 v0.5.3 的 `.crx`/`.zip`）；别名 `latest/download/douyin.user.js` → `200`、21 355 B、`@version 0.7.1`，sha256 与本地 `dist/` 全等（`fa509cfe…371`）
 
 ## 分发 v0.7.0 ✅ 已发版  {spec §M6.1 分发字段 + 待定项 #1 已定案}
 - 版本：`package.json` 0.6.0 → **0.7.0**（M3.3 为新功能，走 minor），构建头版本只来自 `package.json`
