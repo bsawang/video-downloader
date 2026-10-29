@@ -50,6 +50,29 @@ git clone https://github.com/bsawang/video-downloader.git
 # chrome://extensions → 开启开发者模式 → 加载已解压 → 选 extension/ 目录
 ```
 
+## Tampermonkey 版（阶段 0，重构中）
+
+单文件 Tampermonkey 用户脚本（`@grant none`），行为与 extension 0.5.3 等价，现已覆盖详情弹层「作者作品」列表。
+
+安装（推荐，装完自动更新）：
+
+1. 安装 [Tampermonkey](https://www.tampermonkey.net/)，Chrome 138+ 需在扩展页开启**允许用户脚本**
+2. 浏览器打开 [releases/latest/download/douyin.user.js](https://github.com/bsawang/video-downloader/releases/latest/download/douyin.user.js) → TM 弹出安装页 → 安装
+3. 打开抖音，交互与 extension 版一致
+
+脚本头带 `@updateURL`/`@downloadURL`（同指上面的固定链接），TM 会在后台按设置周期检查更新；也可在 TM 面板点「检查用户脚本更新」立即拉取。**通过本地文件安装或拖入安装的脚本没有更新源，需要改从上面的链接安装一次。**
+
+开发者本地构建：
+
+```bash
+npm run build     # src/** → dist/douyin.user.js
+npm test          # node --test，含 legacy oracle 等价用例
+```
+
+发版（让使用者的 TM 自动更新到新版本）：`npm run build` 后新建 release，把 `dist/douyin.user.js` 作为**同名资产**上传——脚本头的 URL 是 `releases/latest/download/douyin.user.js` 固定别名，不需要改动。
+
+> 平台差异集中在 `src/platforms/douyin/`，通用能力在 `src/kernel/`；设计见 [docs/spec.md](./docs/spec.md)。
+
 ## 使用
 
 | 操作 | 说明 |

@@ -1,0 +1,4 @@
+1a
+{"status_code":0,"data":[{"type":1,"aweme_info":{"aweme_id":"7600000000000000005","desc":"搜索流式帧一","author":{"nickname":"作者戊"},"video":{"bit_rate":[{"gear_name":"normal_1080_0","play_addr":{"url_list":["https://v3-web.douyinvod.com/video/search-5-1080.mp4"]}}]}}}]}
+2b
+{"status_code":0,"data":[{"type":1,"aweme_info":{"aweme_id":"7600000000000000006","desc":"搜索流式帧二","author":{"nickname":"作者己"},"video":{"bit_rate":[{"gear_name":"normal_720_0","play_addr":{"url_list":["https://v3-web.douyinvod.com/video/search-6-720.mp4"]}}]}}}]}

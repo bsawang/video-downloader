@@ -1,0 +1,30 @@
+{
+  "status_code": 0,
+  "aweme_list": [
+    {
+      "aweme_id": "7600000000000000002",
+      "desc": "列表第一条",
+      "author": { "nickname": "作者乙" },
+      "video": {
+        "bit_rate": [
+          { "gear_name": "normal_720_0", "play_addr": { "url_list": ["https://v3-web.douyinvod.com/video/feed-2-720.mp4"] } },
+          { "gear_name": "normal_540_0", "play_addr": { "url_list": ["https://v3-web.douyinvod.com/video/feed-2-540.mp4"] } }
+        ]
+      }
+    },
+    {
+      "aweme_id": "7600000000000000003",
+      "desc": "只有 play_addr 的条目",
+      "author": { "nickname": "作者丙" },
+      "video": {
+        "play_addr": { "url_list": ["https://v3-web.douyinvod.com/video/feed-3-default.mp4"] }
+      }
+    },
+    {
+      "aweme_id": "7600000000000000004",
+      "desc": "图文笔记",
+      "author": { "nickname": "作者丁" },
+      "video": { "bit_rate": [] }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "video-downloader",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "description": "页面附着的视频下载底座（Tampermonkey 单文件产物）",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build": "node tools/build.mjs",
+    "probe": "node tools/probe.mjs"
+  }
+}
