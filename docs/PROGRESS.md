@@ -25,6 +25,7 @@
 - 证据（真页 CDP，指针在挂载前就停在视频/卡片上、全程不动）：详情页 4 个按钮 `computed=block` / `inline=none`；首页 49 个宿主中 2 个被 hover 各显示 1 个（其中宿主内含 4 个按钮，只显示自己的）；指针移开 → `visible=0`
 - 单测：`npm test` 28 pass / 0 fail
 - 版本：0.7.1 → 0.7.2
+- 发版：`gh release create v0.7.2`；别名 `latest/download/douyin.user.js` → `200`、21 839 B、`@version 0.7.2`，sha256 与本地 `dist/` 全等（`c8392391…815`）
 - 另：挂载本身仍需等数据（SSR ≈0.5s / 网络响应 / 作者列表 fiber 源每 2s），这部分是数据到达时间，非揭示缺陷
 
 ## 快道 v0.7.1 ✅ {spec §7 · 对照 M3.1 详情页按钮挂载}
