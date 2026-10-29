@@ -19,6 +19,14 @@
 | M6.1 | ✅ | 批次 1 |
 | M3.3 | ✅ | 批次 2 |
 
+## 快道 v0.7.3 ✅ {spec §7 · 对照 M3.1 锚点挂载}
+- 问题：播放页自动跳转后右侧列表按钮消失——页面重渲染把外来的按钮节点清掉，而 `renderedIds` 只记 `videoId`，判定「已挂载」后不再补
+- 现场：收藏页弹层 42 个 `[data-e2e="author-card-list"] li` 全部带 `data-dl-hover`（说明挂过），但 `li [data-dl-icon]` = 0
+- 改动：`src/kernel/core.js` `renderedIds` 值改存 `{ videoId, btn }`，跳过条件加 `btn.isConnected`；仅 id 变化才清旧按钮
+- 证据（真页 CDP，注入新构建）：79 个条目 79/79 有按钮；手动删掉全部 100 个按钮模拟重绘 → 2.5s 内恢复 82 个、条目仍 79/79；再等 5s 计数不增长（无抖动）
+- 单测：`npm test` 28 pass / 0 fail
+- 版本：0.7.2 → 0.7.3
+
 ## 快道 v0.7.2 ✅ {spec §7 · 对照 M3.2 hover 揭示}
 - 问题：按钮「延迟出现」——揭示靠挂载时绑 `mouseenter`；挂载那一刻指针若已停在卡片/播放器上，浏览器不再补发 `mouseenter`，按钮保持 `display:none`，必须移出再移入
 - 改动：`src/kernel/ui.js` 注入 `[data-dl-hover]:hover>[data-dl-icon]{display:block!important}`；`src/kernel/core.js` 在挂载锚点上打 `data-dl-hover`，删掉 mouseenter/mouseleave 监听（子元素用 `>` 限定，避免宿主内嵌套卡片的按钮被连带显示）

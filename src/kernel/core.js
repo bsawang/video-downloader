@@ -27,12 +27,15 @@ export function start(adapter) {
     let mounted = 0;
     let fallback = 0;
     for (const { el, videoId, rule } of found) {
-      if (renderedIds.get(el) === videoId) {
+      const prev = renderedIds.get(el);
+      // 页面重渲染会清掉外来的按钮节点（作者作品列表随播放切换重绘），
+      // 只按 id 记账会一直跳过，必须确认按钮仍在文档里才认为已挂载
+      if (prev && prev.videoId === videoId && prev.btn.isConnected) {
         mounted++;
         continue;
       }
       // 列表虚拟滚动会复用节点：id 变了先摘掉旧按钮，避免按钮指向旧视频
-      if (renderedIds.has(el)) {
+      if (prev && prev.videoId !== videoId) {
         el.querySelectorAll("[data-dl-icon]").forEach((b) => b.remove());
       }
       let item = store.get(videoId);
@@ -58,7 +61,7 @@ export function start(adapter) {
       });
       anchor.appendChild(btn);
       anchor.setAttribute("data-dl-hover", "1");
-      renderedIds.set(el, videoId);
+      renderedIds.set(el, { videoId, btn });
       if (item.fallback) fallbackCount++;
       mounted++;
     }
