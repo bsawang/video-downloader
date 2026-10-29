@@ -26,6 +26,7 @@
 - 证据（真页 CDP，注入新构建）：79 个条目 79/79 有按钮；手动删掉全部 100 个按钮模拟重绘 → 2.5s 内恢复 82 个、条目仍 79/79；再等 5s 计数不增长（无抖动）
 - 单测：`npm test` 28 pass / 0 fail
 - 版本：0.7.2 → 0.7.3
+- 发版：`gh release create v0.7.3`；资产 `douyin.user.js` 22 124 B，GitHub 侧 `digest` = 本地 sha256（`ce9e4296…e93`）；`gh release download` 拉回的文件 `@version 0.7.3` 且哈希一致。本机到 github.com 的裸 `curl` 当时超时（网络抖动），改用 API 通道取证
 
 ## 快道 v0.7.2 ✅ {spec §7 · 对照 M3.2 hover 揭示}
 - 问题：按钮「延迟出现」——揭示靠挂载时绑 `mouseenter`；挂载那一刻指针若已停在卡片/播放器上，浏览器不再补发 `mouseenter`，按钮保持 `display:none`，必须移出再移入
