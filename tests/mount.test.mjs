@@ -61,3 +61,12 @@ test("pickAnchor self 直接返回自身", () => {
   const el = stubEl("li");
   assert.equal(pickAnchor(el, ["self"]), el);
 });
+
+test("pickAnchor 选播放器容器而不是宽容器", () => {
+  const base = stubEl("base");
+  base.style = { position: "relative" };
+  const el = stubEl("wrap");
+  el.querySelector = (sel) => (sel === ".basePlayerContainer" ? base : null);
+  const mounts = [".videoImage", ".douyin-player-video-container", ".basePlayerContainer", "self"];
+  assert.equal(pickAnchor(el, mounts), base);
+});

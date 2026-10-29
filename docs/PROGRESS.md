@@ -19,6 +19,13 @@
 | M6.1 | ✅ | 批次 1 |
 | M3.3 | ✅ | 批次 2 |
 
+## 快道 v0.7.1 ✅ {spec §7 · 对照 M3.1 详情页按钮挂载}
+- 问题：右侧「作者作品」面板展开后主视频下载按钮不移动——按钮挂在整屏宽滑动容器上（`right:16px` → 右缘 1904），播放器随面板收窄到 1371，按钮整块压在面板下面
+- 改动：`src/platforms/douyin/rules.js` 详情弹层规则 `mount` 增加 `.douyin-player-video-container` / `.basePlayerContainer`，`self` 降为兜底
+- 证据（真页 CDP，用户 Chrome inspect 长连接，注入新构建）：面板开 → `basePlayerContainer` 1371 宽、按钮 `1271–1355`；面板关 → 1920 宽、按钮 `1820–1904`；截图确认按钮位于播放器右下、面板左侧
+- 单测：`npm test` 28 pass / 0 fail（新增 `pickAnchor` 选播放器容器、详情规则 mount 顺序两例）
+- 版本：0.7.0 → 0.7.1
+
 ## 分发 v0.7.0 ✅ 已发版  {spec §M6.1 分发字段 + 待定项 #1 已定案}
 - 版本：`package.json` 0.6.0 → **0.7.0**（M3.3 为新功能，走 minor），构建头版本只来自 `package.json`
 - 更新源：`tools/build.mjs` 新增常量 `UPDATE_URL`，头里写 `@updateURL`/`@downloadURL`，同指 `https://github.com/bsawang/video-downloader/releases/latest/download/douyin.user.js`

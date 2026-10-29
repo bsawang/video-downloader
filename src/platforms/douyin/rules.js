@@ -55,7 +55,8 @@ export const rules = {
       selector: '[class*="video_"]',
       idFrom: { type: "className", pattern: /video_(\d+)/ },
       kind: "detail",
-      mount: [".videoImage", "self"],
+      // 弹层的滑动容器恒为整屏宽；右侧面板展开后收窄的是播放器，按钮必须挂在播放器盒子里才跟着动
+      mount: [".videoImage", ".douyin-player-video-container", ".basePlayerContainer", "self"],
     },
     {
       selector: "video",

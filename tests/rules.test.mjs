@@ -32,3 +32,12 @@ test("作者作品列表锚点使用函数式 idFrom", () => {
   assert.equal(typeof rule.idFrom, "function");
   assert.deepEqual(rule.mount, ["self"]);
 });
+
+test("详情弹层规则优先挂到播放器盒子，self 排最后", () => {
+  const rule = rules.anchors.find((r) => r.selector === '[class*="video_"]');
+  assert.ok(rule, "缺少 video_ 详情规则");
+  assert.ok(
+    rule.mount.indexOf(".basePlayerContainer") < rule.mount.indexOf("self"),
+    "播放器容器必须排在 self 之前，否则右侧面板展开后按钮不跟随"
+  );
+});
