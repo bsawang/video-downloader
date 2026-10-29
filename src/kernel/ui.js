@@ -1,5 +1,17 @@
 let activePop = null;
 let toastEl = null;
+let hoverStyle = null;
+
+// hover 揭示走 CSS 而不是 mouseenter 监听：按钮挂载时指针可能已经停在卡片上，
+// 浏览器不会再补发 mouseenter，监听方案会出现「不动鼠标就一直不显示」。
+export function ensureHoverStyle() {
+  if (hoverStyle && hoverStyle.isConnected) return;
+  const root = document.head || document.documentElement;
+  if (!root) return;
+  hoverStyle = document.createElement("style");
+  hoverStyle.textContent = "[data-dl-hover]:hover>[data-dl-icon]{display:block!important}";
+  root.appendChild(hoverStyle);
+}
 
 export function createButton(item, { isDetail, onPick }) {
   const btn = document.createElement("button");

@@ -1,7 +1,7 @@
 import { createStore } from "./store.js";
 import { installNetworkHooks, scanSSR, scanPerformance, scanDomSources, debug } from "./hook.js";
 import { scan, pickAnchor } from "./mount.js";
-import { createButton, toast } from "./ui.js";
+import { createButton, toast, ensureHoverStyle } from "./ui.js";
 import { createDownloader } from "./download.js";
 
 export function start(adapter) {
@@ -23,6 +23,7 @@ export function start(adapter) {
 
   function renderAll() {
     const found = scan(adapter.anchors);
+    ensureHoverStyle();
     let mounted = 0;
     let fallback = 0;
     for (const { el, videoId, rule } of found) {
@@ -56,8 +57,7 @@ export function start(adapter) {
         },
       });
       anchor.appendChild(btn);
-      el.addEventListener("mouseenter", () => (btn.style.display = "block"));
-      el.addEventListener("mouseleave", () => (btn.style.display = "none"));
+      anchor.setAttribute("data-dl-hover", "1");
       renderedIds.set(el, videoId);
       if (item.fallback) fallbackCount++;
       mounted++;

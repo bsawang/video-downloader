@@ -19,6 +19,14 @@
 | M6.1 | ✅ | 批次 1 |
 | M3.3 | ✅ | 批次 2 |
 
+## 快道 v0.7.2 ✅ {spec §7 · 对照 M3.2 hover 揭示}
+- 问题：按钮「延迟出现」——揭示靠挂载时绑 `mouseenter`；挂载那一刻指针若已停在卡片/播放器上，浏览器不再补发 `mouseenter`，按钮保持 `display:none`，必须移出再移入
+- 改动：`src/kernel/ui.js` 注入 `[data-dl-hover]:hover>[data-dl-icon]{display:block!important}`；`src/kernel/core.js` 在挂载锚点上打 `data-dl-hover`，删掉 mouseenter/mouseleave 监听（子元素用 `>` 限定，避免宿主内嵌套卡片的按钮被连带显示）
+- 证据（真页 CDP，指针在挂载前就停在视频/卡片上、全程不动）：详情页 4 个按钮 `computed=block` / `inline=none`；首页 49 个宿主中 2 个被 hover 各显示 1 个（其中宿主内含 4 个按钮，只显示自己的）；指针移开 → `visible=0`
+- 单测：`npm test` 28 pass / 0 fail
+- 版本：0.7.1 → 0.7.2
+- 另：挂载本身仍需等数据（SSR ≈0.5s / 网络响应 / 作者列表 fiber 源每 2s），这部分是数据到达时间，非揭示缺陷
+
 ## 快道 v0.7.1 ✅ {spec §7 · 对照 M3.1 详情页按钮挂载}
 - 问题：右侧「作者作品」面板展开后主视频下载按钮不移动——按钮挂在整屏宽滑动容器上（`right:16px` → 右缘 1904），播放器随面板收窄到 1371，按钮整块压在面板下面
 - 改动：`src/platforms/douyin/rules.js` 详情弹层规则 `mount` 增加 `.douyin-player-video-container` / `.basePlayerContainer`，`self` 降为兜底
