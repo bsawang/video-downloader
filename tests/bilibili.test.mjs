@@ -7,6 +7,7 @@ import {
   biliResolveDownload,
   biliRefresh,
   bilibiliAdapter,
+  buildBiliDashStreams,
   buildBiliStreams,
 } from "../src/platforms/bilibili/adapter.js";
 import { createStore } from "../src/kernel/store.js";
@@ -146,29 +147,176 @@ test("biliResolveDownload 分段视频直接拒绝", async () => {
   }
 });
 
-test("biliRefresh 每个 cid 只取一次并写入 store", async () => {
+test("biliRefresh 每个 cid 只取一次（单文件 + DASH 两路）并写入 store", async () => {
   const restore = withState(state);
   const realFetch = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = async () => {
-    calls++;
-    return {
-      json: async () => ({
-        code: 0,
-        data: { accept_quality: [64, 16], accept_description: ["高清 720P", "流畅 360P"] },
-      }),
-    };
+  const calls = [];
+  const json = (data) => ({ json: async () => ({ code: 0, data }) });
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes("fnval=4048")) {
+      return json({
+        accept_quality: [80, 64, 16],
+        accept_description: ["高清 1080P", "高清 720P", "流畅 360P"],
+        dash: {
+          video: [{ id: 80, codecid: 7, bandwidth: 2000, baseUrl: "https://cdn/v.m4s" }],
+          audio: [{ id: 30280, bandwidth: 192000, baseUrl: "https://cdn/a.m4s" }],
+        },
+      });
+    }
+    return json({ accept_quality: [64, 16], accept_description: ["高清 720P", "流畅 360P"] });
   };
   try {
     const store = createStore();
     await biliRefresh(store);
     await biliRefresh(store);
     await biliRefresh(store);
-    assert.equal(calls, 1);
-    assert.equal(store.get("43140253613").streams.length, 2);
+    assert.equal(calls.length, 2);
+    assert.equal(store.get("43140253613").streams.length, 4);
   } finally {
     globalThis.fetch = realFetch;
     restore();
+  }
+});
+
+test("buildBiliDashStreams 只补单文件拿不到的高档位，并拆画面/音频", () => {
+  const durl = { accept_quality: [64, 16], accept_description: ["高清 720P", "流畅 360P"] };
+  const dash = {
+    accept_quality: [112, 80, 64, 32, 16],
+    accept_description: ["高清 1080P+", "高清 1080P", "高清 720P", "清晰 480P", "流畅 360P"],
+    dash: {
+      video: [
+        { id: 80, codecid: 12, bandwidth: 3000, baseUrl: "hevc" },
+        { id: 80, codecid: 7, bandwidth: 2000, baseUrl: "avc" },
+        { id: 64, codecid: 7, bandwidth: 1000, baseUrl: "720" },
+        { id: 32, codecid: 7, bandwidth: 500, baseUrl: "480" },
+      ],
+      audio: [
+        { id: 30216, bandwidth: 64000, baseUrl: "a64" },
+        { id: 30280, bandwidth: 192000, baseUrl: "a192" },
+      ],
+    },
+  };
+  assert.deepEqual(buildBiliDashStreams(durl, dash), [
+    { label: "高清 1080P 画面（无音轨）", qn: 80, kind: "video" },
+    { label: "高清 1080P 音频", qn: 80, kind: "audio" },
+  ]);
+});
+
+test("buildBiliDashStreams 单文件已有 1080P 时不重复补", () => {
+  const durl = { accept_quality: [80, 64, 16], accept_description: ["高清 1080P", "高清 720P", "流畅 360P"] };
+  const dash = {
+    accept_quality: [112, 80, 64, 16],
+    accept_description: ["高清 1080P+", "高清 1080P", "高清 720P", "流畅 360P"],
+    dash: {
+      video: [
+        { id: 112, codecid: 7, bandwidth: 9000, baseUrl: "1080p-plus" },
+        { id: 80, codecid: 7, bandwidth: 2000, baseUrl: "1080" },
+      ],
+      audio: [{ id: 30280, bandwidth: 192000, baseUrl: "a" }],
+    },
+  };
+  assert.deepEqual(buildBiliDashStreams(durl, dash), [
+    { label: "高清 1080P+ 画面（无音轨）", qn: 112, kind: "video" },
+    { label: "高清 1080P+ 音频", qn: 112, kind: "audio" },
+  ]);
+});
+
+test("biliParsePlayurl 合并 DASH 档位并按清晰度排序", () => {
+  const item = biliParsePlayurl(
+    { accept_quality: [64, 16], accept_description: ["高清 720P", "流畅 360P"] },
+    { bvid: "BV1", cid: "1", page: 1, pageCount: 1, title: "t", author: "a" },
+    {
+      accept_quality: [80, 64, 16],
+      accept_description: ["高清 1080P", "高清 720P", "流畅 360P"],
+      dash: {
+        video: [{ id: 80, codecid: 7, bandwidth: 2000, baseUrl: "v" }],
+        audio: [{ id: 30280, bandwidth: 192000, baseUrl: "a" }],
+      },
+    }
+  );
+  assert.deepEqual(item.streams.map((s) => s.label), [
+    "高清 1080P 画面（无音轨）",
+    "高清 1080P 音频",
+    "高清 720P",
+    "流畅 360P",
+  ]);
+});
+
+test("biliResolveDownload 分离视频流选 AVC 并现取 baseUrl", async () => {
+  const realFetch = globalThis.fetch;
+  let seen = "";
+  globalThis.fetch = async (url) => {
+    seen = String(url);
+    return {
+      json: async () => ({
+        code: 0,
+        data: {
+          dash: {
+            video: [
+              { id: 80, codecid: 12, bandwidth: 3000, baseUrl: "https://cdn/hevc.m4s" },
+              { id: 80, codecid: 7, bandwidth: 2000, baseUrl: "https://cdn/avc.m4s" },
+            ],
+            audio: [{ id: 30280, bandwidth: 192000, baseUrl: "https://cdn/a.m4s" }],
+          },
+        },
+      }),
+    };
+  };
+  try {
+    const plan = await biliResolveDownload(
+      { bvid: "BV1", cid: "1", author: "up", title: "t", page: 1, pageCount: 1, part: "" },
+      { label: "高清 1080P 画面（无音轨）", qn: 80, kind: "video" }
+    );
+    assert.match(seen, /fnval=4048/);
+    assert.match(seen, /qn=80/);
+    assert.equal(plan.url, "https://cdn/avc.m4s");
+    assert.equal(plan.credentials, "omit");
+    assert.equal(plan.filename, "up_t_高清 1080P 画面（无音轨）.mp4");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("biliResolveDownload 分离音频取标准 AAC 最高码率并落 .m4a", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    json: async () => ({
+      code: 0,
+      data: {
+        dash: {
+          video: [{ id: 80, codecid: 7, bandwidth: 2000, baseUrl: "v" }],
+          audio: [
+            { id: 30216, bandwidth: 64000, baseUrl: "https://cdn/a64.m4s" },
+            { id: 30280, bandwidth: 192000, baseUrl: "https://cdn/a192.m4s" },
+            { id: 30250, bandwidth: 999000, baseUrl: "https://cdn/dolby.m4s" },
+          ],
+        },
+      },
+    }),
+  });
+  try {
+    const plan = await biliResolveDownload(
+      { bvid: "BV1", cid: "1", author: "up", title: "t", page: 1, pageCount: 1, part: "" },
+      { label: "高清 1080P 音频", qn: 80, kind: "audio" }
+    );
+    assert.equal(plan.url, "https://cdn/a192.m4s");
+    assert.equal(plan.filename, "up_t_高清 1080P 音频.m4a");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("biliResolveDownload 分离流缺对应档位时报不可用", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ json: async () => ({ code: 0, data: { dash: { video: [], audio: [] } } }) });
+  try {
+    await assert.rejects(
+      () => biliResolveDownload({ bvid: "BV1", cid: "1" }, { label: "1080P", qn: 80, kind: "video" }),
+      /该清晰度不可用/
+    );
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });
 

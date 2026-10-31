@@ -20,6 +20,24 @@
 | M3.3 | ✅ | 批次 2 |
 | M7.1 | ✅ | 批次 3 |
 | M7.2 | ✅ | 批次 3 |
+| M7.3 | ✅ | 批次 3 |
+
+## v0.9.0 ✅ {spec §M7.3 · B站 DASH 分离流档位}
+- 需求：现代视频单文件接口（`fnval=1`）上限 720P，1080P 只在 DASH；先提供「画面 / 音频」两条分流链接，合流留给下载后处理队列（待定项 #3）
+- 调研（登录态真页 + 接口实证）：`BV1JYsd6sE4k` 登录且 `vip=0` → `fnval=1` 仅 `[64,16]`；`fnval=4048` 的 `accept_quality` 为 `[112,80,64,32,16]`，`dash.video` 实际档位 `[80,64,32,16]`（112 为大会员锁定），`dash.audio` 为 `[30280,30216,30232]`。`credentials: include` 与 `omit` 对 `fnval=1` 结果一致 → 此前「登录后档位不对」不是 cookie 问题，是单文件通道本身只有低档
+- 改动：
+  - `src/platforms/bilibili/adapter.js`：`biliPlayurlUrl(meta, qn, fnval=1)`；新增 `buildBiliDashStreams`（只补 `qn >` 单文件最高档，每档「画面（无音轨）」+「音频」两条）；`biliParsePlayurl(data, meta, dashData?)` 合并两路；`biliResolveDownload` 按 `stream.kind` 走 `fnval=4048`，画面优先 `codecid=7`（AVC）、音频优先标准 AAC（30216/30232/30280）取最高码率；`biliFilename` 扩展名按 kind 取 `.mp4`/`.m4a`；`biliRefresh` 并发取两路，各自失败隔离
+  - 版本 0.8.0 → **0.9.0**；README / prd / spec 同步「分流下载 + 合流后置」
+- 单测：`npm test` **46 pass / 0 fail**（新增：只补高于单文件档、已含同档不重复、AVC 优先、AAC 最高码率、缺档报错、refresh 两路并发）
+- 真页收点（用户 Chrome CDP，登录态，注入等价构建）：
+  - 菜单 `BV1JYsd6sE4k`：`⬇ 高清 1080P 画面（无音轨）` / `⬇ 高清 1080P 音频` / `⬇ 高清 720P` / `⬇ 流畅 360P`，1080P 两条排在 720P 之上
+  - 直链取证：1080P AVC `baseUrl` 带 `Range: bytes=0-1023` → `206`，`content-range: bytes 0-1023/83 276 924`
+  - 音频全量：点「1080P 音频」→ 落盘 **5 211 414 B**，`close` 成功、无 abort；文件名 `…_高清 1080P 音频.m4a`
+  - 画面全量：换 `BV1sqxP69Ebq` 点「1080P 画面（无音轨）」→ 落盘 **18 821 824 B**，`close` 成功、无 abort；文件名 `…_高清 1080P 画面（无音轨）.mp4`
+  - 观察字节数时把 `showSaveFilePicker` 换成内存 writer（页面内测试桩），收点后删除测试桩并 reload 复原原生保存对话框
+  - 抖音回归：`__dlStats` 与按钮数正常（kernel 未改动）
+- 构建：`npm run build` → `dist/douyin.user.js` **33 569 B（30.7 KB）**，`node --check` 通过，头 `@version 0.9.0`
+- 未覆盖：合流未做（待定项 #3）；大会员档（qn 112）不可达是平台策略；分段单文件视频仍拒
 
 ## v0.8.0 ✅ {spec §M7 · B站详情页}
 - 需求：B 站播放页（`/video/BV...`）无水印下载，先做详情页；B 站以长视频为主

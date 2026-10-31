@@ -1,4 +1,4 @@
-# 短视频下载器 规约 (v0.8.0)
+# 短视频下载器 规约 (v0.9.0)
 
 > 业务层 → [prd.md](./prd.md)（本文件 Mx 模块与 prd 一一对应）
 
@@ -28,9 +28,10 @@ VideoItem = {
   fallback?: boolean,         // perf 兜底构造的条目（不进 store，仅本次渲染）
   [extra: string]: unknown    // 平台附加字段（如 B站 bvid/cid/page/pageCount/part），kernel 不读
 }
-Stream = { label: string, url?: string, qn?: number }
+Stream = { label: string, url?: string, qn?: number, kind?: 'video' | 'audio' }
 // label 如 "1080p" / "1080P"；url 为带签名的直链，能预取到时才填；
-// B站长视频直链会过期，只记平台档位码 qn，点下载时由 adapter.resolveDownload 现取
+// B站长视频直链会过期，只记平台档位码 qn，点下载时由 adapter.resolveDownload 现取；
+// kind 标记 DASH 分离流（画面/音频各一条），缺省为可直接播放的单文件流
 DownloadPlan = { url: string, credentials: 'omit' | 'include', headers?: Record<string,string>, filename?: string }
 ```
 
@@ -125,7 +126,7 @@ extension/                 冻结，仅回归沙箱
 | 声明式锚点规则 | 规则是平台数据，扫描器可复用 | 通用 DOM 匹配器（平台差异无法稳定覆盖） |
 | 验证通道：CDP（Node 内置 WebSocket，`tools/probe.mjs`） | 与用户实际调试方式一致，可复用已登录的本机 Chrome；注入 + 读 `__dlStats` 同一通道完成 | Playwright（另起 profile → 登录态失效、与用户 9222 端口冲突、匿名 headless 被判验证码；`spikes/verify_tm.py`、`spikes/verify_dom.py` 为历史脚本，默认不再使用） |
 | 更新源：Releases 固定别名 `releases/latest/download/douyin.user.js` | 换版本只重发同名资产，脚本头的 URL 恒定；`dist/` 继续忽略，产物不进 git 历史 | `raw.githubusercontent.com` 直链（须把构建产物提交入库，与 `dist/` 忽略规则冲突，且每次发版产生二进制 diff）；`gh-pages` 分支（多一条发布链路，收益低） |
-| B站清晰度用旧版 `playurl`（`fnval=1` → 单文件 `durl`） | 无 muxing 依赖，浏览器内可直接下载；`accept_quality/accept_description` 只列当前账号在该视频上真实可取的档位 | DASH（`fnval=4048`）：音视频分离，脚本内无法合并；`__playinfo__` 首屏 SSR：切 P 后不更新，且档位受登录态限制不如接口真实 |
+| B站清晰度用旧版 `playurl`（`fnval=1` → 单文件 `durl`），单文件拿不到的高档位另取 DASH 拆成「画面/音频」两条 | 低档直接得到可播放单文件；`accept_quality/accept_description` 只列当前账号在该视频上真实可取的档位；高档位先以分流提供，避免引入合流依赖 | 只用 DASH 一步到位（音视频分离，必须合流；合流见待定项 #3）；`__playinfo__` 首屏 SSR：切 P 后不更新，且档位受登录态限制不如接口真实 |
 | B站长视频落盘走 File System Access（`showSaveFilePicker` + `createWritable`） | 3GB+ 单文件流式写盘，不整份驻留内存；picker 在点击的同步激活里弹出 | `GM_download`（需改 `@grant`/双世界，与 `@grant none` 单世界选型冲突，且 TM 下载器另起请求拿不到登录态）；继续用 blob（4 小时视频实测 3,482,563,020 B，内存扛不住） |
 
 ## 4. 功能需求
@@ -148,6 +149,7 @@ extension/                 冻结，仅回归沙箱
 | M6.2 | M6 | 行为基准 | 🟢 |
 | M7.1 | M7 | B站详情页识别与清晰度 | 🟢 |
 | M7.2 | M7 | 多分P切换与长视频落盘 | 🟢 |
+| M7.3 | M7 | DASH 高档位分离流下载 | 🟢 |
 
 ### 需求树（依赖图）
 
@@ -192,6 +194,9 @@ flowchart TD
     M1.2 --> M7.2
     M2.2 --> M7.2
     M7.1 --> M7.2
+    M1.2 --> M7.3
+    M2.2 --> M7.3
+    M7.1 --> M7.3
 ```
 
 ### M1 视频识别与数据采集 🟢
@@ -431,10 +436,22 @@ flowchart TD
 - 错误与边界：切 P 瞬间状态短暂为空 → 下一轮重试；URL `p` 越界回退第 1P；重复 upsert 由 store 按 cid 去重；picker 取消（`AbortError`）→ toast「已取消下载」且不发请求；浏览器不支持 `showSaveFilePicker` → 静默回落 blob 路径（超长视频有内存风险，README 注明）
 - 测试要点：`tests/bilibili.test.mjs`（当前 P 定位、多分P文件名、refresh 每 cid 一次）；`tests/download.test.mjs`（Promise 计划、落盘字节、取消不请求）；真页 CDP：P3 → P1 菜单/文件名跟随，落盘 2,350,008 B 与服务端一致
 
+#### M7.3 DASH 高档位分离流下载 🟢
+- **验收**：登录态下打开单文件仅 720P 的现代视频，菜单在 720P 之上出现「高清 1080P 画面（无音轨）」与「高清 1080P 音频」；分别点选各得一个文件（`.mp4` / `.m4a`），CDN 返回 `206` 且字节数与 `content-range` 一致；单文件已含同档（旧视频 1080P）时不出现重复项
+- **依赖**：M1.2、M2.2、M7.1
+
+详细设计：
+- 数据流：`refresh` 并发请求 `fnval=1`（单文件低档）与 `fnval=4048`（DASH）→ `buildBiliDashStreams` 取 `dash.video` 中 `qn > 单文件最高档` 的档位，每档追加「画面（无音轨）」「音频」两条 stream → store → 菜单；点选 → `biliResolveDownload` 按 `kind` 再请求 `fnval=4048` → 选流 → `baseUrl` → 现有落盘链路
+- 接口：`biliPlayurlUrl(meta, qn, fnval=1)`；`buildBiliDashStreams(durlData, dashData): Stream[]`；`biliParsePlayurl(data, meta, dashData?)`；`biliResolveDownload(item, stream)` 支持 `stream.kind`
+- 数据结构：分离流无预置 `url`，只有 `{ label, qn, kind }`；DASH 条目含 `id/codecid/bandwidth/baseUrl/backupUrl`
+- 算法与规则：`durlMax = max(单文件档 qn)`，只补严格大于它的档；同 qn 多编码取 `codecid=7`（AVC），否则取最高带宽；音频优先标准 AAC（`30216/30232/30280`）并取最高带宽；URL 依次取 `baseUrl → base_url → backupUrl[0]`；标签为 `accept_description + " 画面（无音轨）" / " 音频"`；文件名扩展名按 kind 取 `.mp4` / `.m4a`
+- 错误与边界：DASH 请求失败不影响单文件档（`Promise.all` 各自 catch）；无 `dash.audio` 时不补分离档；所选 qn 在 DASH 中不存在 → 「该清晰度不可用」；直链约 2 小时过期，点选时现取；不合并音视频（见待定项 #3）
+- 测试要点：`tests/bilibili.test.mjs`（只补高于单文件档、已含同档不重复、AVC 优先、AAC 最高码率、缺档报错、refresh 两路并发）；真页 CDP：菜单出现 1080P 两条、各落一份、Range `206`
+
 ## 5. 不在范围内
 
 - 新平台接入范围：本轮只做 **B站详情页**（`/video/BV...`）；B站搜索页、个人主页、番剧、直播、互动视频不接；小红书 / YouTube 仍为规划。
-- B站 DASH 音视频分离流、分段视频（`durl.length > 1`）、登录/大会员能力绕过不在范围内。
+- B站音视频**合并**、分段单文件视频（`durl.length > 1`）、登录/大会员能力绕过不在范围内；1080P 及以上以分离流分别下载（M7.3），合并见待定项 #3。
 - 不做 `GM_download`、远程适配下发、独立 UI、常驻后台、MV3 新版本、Web/后端版、签名破解与反爬对抗。
 - `extension/` 仅作回归沙箱，不再发版。
 
@@ -443,6 +460,7 @@ flowchart TD
 | # | 待定 | 谁来定 | 何时必须定 | 影响 |
 |---|---|---|---|---|
 | 2 | 是否在阶段 1 切 `GM_download`（需双脚本或 `@inject-into page` 实测） | bsawang | 接入第二个平台前 | 影响 M2.2 transport，不影响阶段 0 |
+| 3 | B站 1080P 及以上的音视频合并方式（自研 fMP4 remux / 引入库），以及是否并入「下载后处理队列」 | bsawang | 做下载后处理队列时 | 影响 M7.3 产物是否开箱可播；不阻塞分流下载 |
 
 > 原 #1（`@updateURL` / `@downloadURL` 托管地址）已于 2026-10-29 定案：Releases 固定别名，见 §3.6 选型记录。
 > 原 #2 已于 2026-10-31 定案：不切 `GM_download`。长视频落盘走 File System Access（M2.2 / M7.2），抖音继续 blob；`@grant none` 单世界不变。
@@ -468,3 +486,4 @@ flowchart TD
 | 2026-10-29 | 改验收 | M6.1 验收与头字段增加 `@updateURL`/`@downloadURL`；关闭待定项 #1（定为 Releases 固定别名）；`package.json` 0.6.0 → 0.7.0 | 用户要求 TM 自动更新：无这两个字段 TM 无从检查更新；发版时在 release 挂同名 `douyin.user.js` 资产，`latest/download` 别名保持恒定 |
 | 2026-10-31 | 新增模块 | 新增 M7「平台接入（B站详情页）」及 M7.1/M7.2；prd 同步新增 M7 与非目标调整 | 用户要求用 CDP 调研开发 B 站播放页下载（先详情页），验证“新增平台 = 新增适配” |
 | 2026-10-31 | 改详细设计 | §2.1 `Stream.url` 改可选、加 `qn`，`DownloadPlan.filename` 改可选；§2.2 adapter 加 `refresh?`/`filename?`/`streamToDisk?`，`resolveDownload` 允许返回 Promise，补 `ssrSelector`/`perfPattern`；M1.2 增加 `refresh` 定时触发；M2.2 增加 File System Access 落盘路径；M6.1 改为多 adapter 拼接、`@match` 并集；关闭待定项 #2（不切 `GM_download`） | B站清晰度与直链都不在 DOM/网络响应/首屏 SSR 里，需 adapter 现取；长视频单文件可达 3GB+，blob 整份驻留内存不可用；同一脚本需同时承载两个平台 |
+| 2026-10-31 | 新增子需求 | 新增 M7.3「DASH 高档位分离流下载」；§2.1 `Stream` 增加 `kind: 'video' \| 'audio'`；新增待定项 #3（音视频合并后置） | 现代视频 `fnval=1` 单文件上限 720P，1080P 只在 DASH；合流成本高，先按画面/音频两次下载满足 1080P 需求 |
