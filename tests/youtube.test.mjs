@@ -41,6 +41,7 @@ const player = {
         mimeType: 'video/mp4; codecs="avc1.640028"',
         qualityLabel: "1080p",
         bitrate: 2000000,
+        contentLength: "8691760",
         url: "https://rr1.example.com/v137",
       },
       {
@@ -81,6 +82,7 @@ const player = {
         itag: 140,
         mimeType: 'audio/mp4; codecs="mp4a.40.2"',
         bitrate: 129000,
+        contentLength: "4840547",
         url: "https://rr1.example.com/a140",
       },
       {
@@ -97,11 +99,16 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function withYtcfg(key) {
+function withYtcfg(key, visitorData = "") {
   const prev = Object.getOwnPropertyDescriptor(globalThis, "ytcfg");
   Object.defineProperty(globalThis, "ytcfg", {
     configurable: true,
-    value: key ? { get: (name) => (name === "INNERTUBE_API_KEY" ? key : "") } : undefined,
+    value: key
+      ? {
+          get: (name) =>
+            name === "INNERTUBE_API_KEY" ? key : name === "VISITOR_DATA" ? visitorData : "",
+        }
+      : undefined,
   });
   return () => {
     if (prev) Object.defineProperty(globalThis, "ytcfg", prev);
@@ -443,32 +450,29 @@ test("ytResolveDownload 节点不可达时换 mn 里的节点", async () => {
   }
 });
 
-test("ytResolveDownload 首次直链被 403 时重取一份新链", async () => {
+test("ytResolveDownload 首个 client 的链被 403 拒绝时换下一个 client", async () => {
   const restoreCfg = withYtcfg("K");
-  let round = 0;
   const bad = clone(player);
   bad.streamingData.adaptiveFormats.find((f) => f.itag === 137).url = "https://rr1.example.com/bad137";
   bad.streamingData.adaptiveFormats.find((f) => f.itag === 140).url = "https://rr1.example.com/bad140";
   const good = clone(player);
   good.streamingData.adaptiveFormats.find((f) => f.itag === 137).url = "https://rr2.example.com/good137";
   good.streamingData.adaptiveFormats.find((f) => f.itag === 140).url = "https://rr2.example.com/good140";
-  const blocked = ok({ playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Sign in to confirm you’re not a bot" } });
-  const mock = mockFetch((url) => {
+  const mock = mockFetch((url, opts) => {
     if (/youtubei\/v1\/player/.test(url)) {
-      round += 1;
-      if (round === 1) return ok(bad);
-      if (round === 4) return ok(good);
-      return blocked;
+      const client = JSON.parse(opts.body).context.client.clientName;
+      return ok(client === "VISIONOS" ? bad : good);
     }
-    if (/bad/.test(url)) return { ok: false, status: 403, json: async () => ({}) };
-    return { ok: true, status: 206, json: async () => ({}) };
+    if (/bad/.test(url)) return { ok: false, status: 403 };
+    return { ok: true, status: 206, body: { cancel: async () => {} } };
   });
   try {
     const stream = ytBuildStreams(bad).find((s) => s.label === "1080p");
     const plan = await ytResolveDownload(ytParsePlayer(bad, ID), stream);
-    assert.equal(round, 4, "首份响应的签名取不到数据，其余 client 被风控后应重取一份");
     assert.equal(plan.parts[0].url, "https://rr2.example.com/good137");
     assert.equal(plan.parts[1].url, "https://rr2.example.com/good140");
+    // 每个 client 只取一份响应：连着重取会被 googlevideo 判成滥用，连带好签名一起 403
+    assert.equal(mock.calls.filter((c) => /youtubei\/v1\/player/.test(c.url)).length, 2);
   } finally {
     mock.restore();
     restoreCfg();
@@ -497,6 +501,68 @@ test("ytResolveDownload 首个 client 被风控时用后面 client 的链", asyn
   }
 });
 
+test("ytFetchPlayer 带上页面 visitorData，否则 VISIONOS 会被当成机器人", async () => {
+  const restoreCfg = withYtcfg("K", "VD-TEST");
+  const mock = mockFetch(() => ok(clone(player)));
+  try {
+    await ytFetchPlayer(ID);
+    const call = mock.calls[0];
+    assert.equal(call.opts.headers["X-Goog-Visitor-Id"], "VD-TEST");
+    assert.equal(JSON.parse(call.opts.body).context.visitorData, "VD-TEST");
+  } finally {
+    mock.restore();
+    restoreCfg();
+  }
+});
+
+test("ytFetchPlayer 无 visitorData 时不发空头与空 context 字段", async () => {
+  const restoreCfg = withYtcfg("K");
+  const mock = mockFetch(() => ok(clone(player)));
+  try {
+    await ytFetchPlayer(ID);
+    assert.equal(mock.calls[0].opts.headers["X-Goog-Visitor-Id"], undefined);
+    assert.equal("visitorData" in JSON.parse(mock.calls[0].opts.body).context, false);
+  } finally {
+    mock.restore();
+    restoreCfg();
+  }
+});
+
+test("ytResolveDownload 只给 1 MiB 预览的直链会被筛掉换下一个 client", async () => {
+  const restoreCfg = withYtcfg("K", "VD-TEST");
+  const preview = clone(player);
+  preview.streamingData.adaptiveFormats.find((f) => f.itag === 137).url = "https://rr9.example.com/preview137";
+  preview.streamingData.adaptiveFormats.find((f) => f.itag === 140).url = "https://rr9.example.com/preview140";
+  const full = clone(player);
+  full.streamingData.adaptiveFormats.find((f) => f.itag === 137).url = "https://rr8.example.com/full137";
+  full.streamingData.adaptiveFormats.find((f) => f.itag === 140).url = "https://rr8.example.com/full140";
+  const probeCalls = [];
+  const mock = mockFetch((url, opts) => {
+    if (/youtubei\/v1\/player/.test(url)) {
+      const client = JSON.parse(opts.body).context.client.clientName;
+      return ok(client === "VISIONOS" ? preview : full);
+    }
+    probeCalls.push({ url, opts });
+    // 预览链（风控下 IOS 直链）超出 1 MiB 就 403；完整链 206 且带总长度
+    if (/preview/.test(url)) return { ok: false, status: 403 };
+    return { ok: true, status: 206, body: { cancel: async () => {} } };
+  });
+  try {
+    const stream = ytBuildStreams(player).find((s) => s.label === "1080p");
+    const plan = await ytResolveDownload(ytParsePlayer(player, ID), stream);
+    assert.equal(plan.parts[0].url, "https://rr8.example.com/full137");
+    assert.equal(plan.parts[1].url, "https://rr8.example.com/full140");
+    // 探测从 1 MiB 处取 2 字节：只给前 1 MiB 的预览链在这个偏移上必然 403
+    assert.equal(probeCalls[0].opts.method, undefined);
+    assert.deepEqual(probeCalls[0].opts.headers, { Range: "bytes=1048576-1048577" });
+    assert.equal(probeCalls[0].opts.cache, "no-store");
+    assert.equal(plan.parts[0].cache, "no-store");
+  } finally {
+    mock.restore();
+    restoreCfg();
+  }
+});
+
 test("ytResolveDownload 合并档返回画面 + 音轨两路新链", async () => {
   const restoreCfg = withYtcfg("K");
   const fresh = clone(player);
@@ -510,7 +576,9 @@ test("ytResolveDownload 合并档返回画面 + 音轨两路新链", async () =>
     assert.equal(plan.parts.length, 2);
     assert.equal(plan.parts[0].url, "https://rr2.example.com/v137fresh");
     assert.equal(plan.parts[1].url, "https://rr2.example.com/a140fresh");
-    assert.deepEqual(plan.parts[0].headers, { Range: "bytes=0-" });
+    // 部分签名不认 bytes=0-（会 403），必须用带上界的 Range
+    assert.deepEqual(plan.parts[0].headers, { Range: "bytes=0-8691759" });
+    assert.deepEqual(plan.parts[1].headers, { Range: "bytes=0-4840546" });
     assert.match(plan.filename, /测试作者_测试视频_1080p\.mp4$/);
   } finally {
     mock.restore();

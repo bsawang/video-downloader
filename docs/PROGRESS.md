@@ -34,6 +34,28 @@
 | M10.3 | ✅ | 批次 8 |
 | M10.4 | ✅ | 批次 8 |
 
+## v0.14.4 ✅ {spec §M9.1/M9.3 · visitorData + 1 MiB 偏移探测 + 带上界 Range，修「持续下载报错」}
+- 缺陷 / 需求（用户反馈）：0.14.3 之后仍「持续出现下载错误」，toast 为「✗ 下载失败：Error: YouTube 直链被拒绝，请刷新页面后重试」
+- 调研（用户要求先看成熟工具怎么解，不盲试）：
+  - yt-dlp issue #17103：googlevideo 403 的常见成因是 IPv6 / 代理 / 高频下载，建议 `--force-ipv4`；yt-dlp 因缺少 GVS PO token 会跳过 `ios` client
+  - cobalt：用 youtubei.js 带 `po_token` + `visitor_data`，遇 403 重建 Innertube client
+  - 结论：① 匿名 InnerTube 请求会被判机器人；② 短时间高频重取会被 CDN 限流；③ 探测请求必须与真实下载同形，`HEAD` 不可用
+- 根因（四条，均有实测）：
+  1. **`HEAD` 在 googlevideo 上一律 403** → 0.14.3 的探测把可用链全部判死
+  2. **高频重取被限流**：「4 轮 × 3 client」短时间内发出十几次取档/探测，被 CDN 判滥用后连好签名一起 403（100 MB 下载刚结束、紧接着 360p 探 403 的现场）
+  3. **缺 `visitorData`**：`VISIONOS` / `ANDROID_VR` 返回 `LOGIN_REQUIRED`（Sign in to confirm you're not a bot）；`IOS` 虽能出链但只给前 1 MiB
+  4. **部分签名只认带上界 Range**：同一条签名 `bytes=0-` 403、`bytes=0-<clen-1>` 206
+- 实现：
+  - [src/platforms/youtube/adapter.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/adapter.js)：新增 `ytVisitorData()`，取档同时带 `context.visitorData` 与 `X-Goog-Visitor-Id`；`ytBuildStreams` 记录 `size` / `audioSize`（`contentLength`）
+  - 同文件：`ytPickReachable` 改为 `Range: bytes=1048576-1048577` + `no-store`，`403` 直接放弃换 client，`Failed to fetch` 换 `mn=` 里的另一个节点（候选最多 2 个），`416` 视为签名有效；`ytRange`/`ytPlan` 下载用 `bytes=0-<size-1>`；`ytResolveDownload` 改为**单轮**三 client，删除 `YT_DOWNLOAD_ATTEMPTS`
+  - [src/kernel/download.js](file:///E:/work/ai/video-downloader/src/kernel/download.js)：把 plan 里的 `cache: "no-store"` 透传给 fetch（探测与下载都不落缓存）
+  - [tests/youtube.test.mjs](file:///E:/work/ai/video-downloader/tests/youtube.test.mjs)：断言探测 Range 为 `bytes=1048576-1048577`、合并档下载为 `bytes=0-8691759` / `bytes=0-4840546`、首个 client 判死后只换 client（恰好 2 次 player 调用）
+- 单测：`npm test` **123 pass / 0 fail**
+- 真页收点（用户 Chrome，TM 已装 0.14.4 构建，`tools/devserve.mjs` 8765 分发；走既有 CDP 长连接）：
+  - 360p 合并档：3 次 player（前两个 client 的链被探失败），探测 `bytes=1048576-1048577` → `206`；下载 `bytes=0-2580481` + `bytes=0-1068151` 均 `206`；toast **✓ 下载完成（已合并）**；OPFS 输出 **3 648 103 B**、文件头 `ftyp`
+  - 1080p 合并档：画面 `bytes=0-98561000` + 音轨 `bytes=0-2799222`，OPFS 输出 **101 359 333 B**，与进度一致
+- 构建：`npm run build` → `dist/douyin.user.js` **94 837 B**（0.14.3 93 266 B，+1 571 B），`node --check` 通过，`@version 0.14.4`，sha256 `a4e12035c51fa27585a59840783e98b58cb275dbad4b37fec6364c1b2e546075`
+
 ## v0.14.3 ✅ {spec §M9.3 · 直链 HEAD 探测 + 签名重取，修「下载报错 / 数据不完整」}
 - 缺陷 / 需求（用户反馈）：「网址标记不安全；之前可以下载时下载速度很慢，现在下载链接报错」
 - 根因（两条独立，均已实测复现）：

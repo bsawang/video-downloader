@@ -66,6 +66,7 @@ export function createDownloader({ nativeFetch, toast, opfs }) {
     const resp = await nativeFetch(part.url, {
       credentials: part.credentials || "omit",
       headers: part.headers,
+      ...(part.cache ? { cache: part.cache } : {}),
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const total = parseInt(resp.headers.get("content-length") || "0", 10) || 0;
@@ -100,6 +101,7 @@ export function createDownloader({ nativeFetch, toast, opfs }) {
     const resp = await nativeFetch(plan.url, {
       credentials: plan.credentials || "omit",
       headers: plan.headers,
+      ...(plan.cache ? { cache: plan.cache } : {}),
     });
     if (!resp.ok) {
       if (writable) await writable.abort();
