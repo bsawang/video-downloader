@@ -26,6 +26,24 @@
 | M8.2 | ✅ | 批次 5 |
 | M8.3 | ✅ | 批次 5 |
 
+## 快道 v0.11.3 ✅ {spec §7 · 小红书播放弹窗按钮消失}
+- 缺陷（用户反馈）：小红书播放弹窗（从发现页点卡片打开的 `#noteContainer`）里没有下载按钮
+- 定位：
+  - 新版弹层从接口取笔记数据，不再写 `window.__INITIAL_STATE__`：打开后 `note.noteDetailMap` 为空对象（实测 `keys: []`），而 `#noteContainer` 与 `.player-container`/`video` 正常渲染
+  - 详情锚点 `idFrom` 只认 `noteDetailMap` 里的 video 笔记 → 返回 null → kernel 直接跳过该锚点，永不挂按钮
+  - 直开笔记 URL 时页面仍会内联状态，所以该缺陷只在「卡片点开弹层」路径出现
+- 改动：
+  - [src/platforms/xiaohongshu/rules.js:169](file:///E:/work/ai/video-downloader/src/platforms/xiaohongshu/rules.js#L169) `idFrom` 改为两级判定：页面状态是视频笔记 → 取路径 id；否则容器里已有 `video` 播放器 → 也认作视频笔记；图文弹层无 `video`，仍不挂按钮
+  - 版本 0.11.2 → **0.11.3**；无 Mx.y 与验收判据变化
+- 单测：`npm test` **78 pass / 0 fail**（新增详情锚点三种情况：无状态 + 有播放器 → 取 id；无状态 + 无播放器 → null；有状态 → 取 id）
+- 真页收点（CDP 注入 0.11.3，弹层路径 `6adc4870…`，注入前弹层 0 按钮）：
+  - 注入后 `#noteContainer .player-container` 挂上新按钮，`data-dl-hover=1`；`window.__dlStats` `{anchors:16, mounted:16, candidates:1}`
+  - hover 后点开菜单：标题「盘点那些杀人诛心爆笑名场面」，档位 `⬇ 1080p / 720p`（标题与档位均来自补全请求的笔记页 HTML）
+  - 点 720p：`sns-video-v6…/258/…_258.mp4` 单次传输 **88 300 669 B** 完成
+  - 图文卡片点击未打开弹层（站点交互未触发），未取得图文弹层真页样本；单测覆盖「无 video → null」
+- 构建：`npm run build` → `dist/douyin.user.js` **55 001 B**，`@version 0.11.3`，sha256 `cf4041ae…1523`
+- 发版：release v0.11.3 挂同名资产；固定别名 → `200`、55 001 B、`@version 0.11.3`，sha256 与本地全等
+
 ## 快道 v0.11.2 ✅ {spec §7 · 小红书登录态取档位失败 + 弹层档位不全}
 - 缺陷（用户反馈）：已登录小红书后点下载提示取链接失败；另外菜单档位比站点实际提供的少
 - 定位一（取链失败）：
