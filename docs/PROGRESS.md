@@ -51,6 +51,7 @@
   - 下载：144p 完整落盘 **2 058 142 B / 54 writes**，toast `✓ 下载完成`；720p 传输至 5.2 MiB（随后网络中断，与页面自身播放器同时卡缓冲）；更早构建 1080p 完整 **80 911 999 B**（77.2 MiB / 4 638 writes）
   - 受限视频：不再静默失败，提示「YouTube 要求人机验证，请先在浏览器打开该视频后再试」；`LOGIN_REQUIRED` 单独提示
 - 构建：`npm run build` → `dist/douyin.user.js` **68 543 B**，`@version 0.12.0`，sha256 `a3cd23b98e86a05c6b0e77437f29cc90d71c364a965dd1c434e07c08be8ea570`
+- 发版：release v0.12.0 挂 `douyin.user.js` + `video-downloader-v0.5.3.crx/.zip`；固定别名 → `200`、68 543 B、`@version 0.12.0`，sha256 与本地全等
 
 ## 快道 v0.11.5 ✅ {spec §7 · /red_video 栏目笔记不挂按钮}
 - 缺陷（用户反馈）：首页正常，`https://www.xiaohongshu.com/red_video` 栏目仍有问题——从该栏目点开卡片后，播放弹层里没有下载按钮
