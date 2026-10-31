@@ -47,6 +47,8 @@
   - 详情页 `6ac31b54…`：`{candidates:1, anchors:12, mounted:12, downloadable:1}`；按钮 91×37 @ (936,44)，播放器 (441,32,599,799)，右/顶间距均 12；菜单 `[1080p, 720p]`；点选后 CDN 请求带签名、无 Cookie，Range `206 / video/mp4 / ftyp`
   - 发现页 `/explore`：30 张卡中 12 张视频卡全部挂按钮（图文卡 0）；hover 后 `candidates 0→1 / downloadable 0→1`；按钮 38×25 @ (898,237)（卡片右缩进 8）；菜单 `[1080p, 720p]`
   - 卡片点选 `1080p`：请求为 `https://sns-video-v4.xhscdn.com/...sign=...`，传输 **139 056 187 B**（http 直链版本实测 `Failed to fetch`，升 https 后成功）
+- 构建：`npm run build` → `dist/douyin.user.js` **52 283 B**，`@version 0.11.0`，sha256 `4e871e84…1e03`
+- 发版：`gh release create v0.11.0`（资产 `douyin.user.js` + `video-downloader-v0.5.3.crx` + `.zip`）；固定别名拉取 `200`、52 283 B、`@version 0.11.0`，sha256 与本地 `dist/` 全等
 - 未覆盖：搜索页 `/search_result` 与个人主页需登录，本轮未验证；图文笔记不注入（设计如此）
 
 ## 快道 v0.10.2 ✅ {spec §7 · 对照 M7.1 详情按钮位置}
