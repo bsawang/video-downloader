@@ -13,7 +13,7 @@ export function ensureHoverStyle() {
   root.appendChild(hoverStyle);
 }
 
-export function createButton(item, { isDetail, onPick }) {
+export function createButton(item, { isDetail, onPick, onOpen, iconRight }) {
   const btn = document.createElement("button");
   btn.setAttribute("data-dl-icon", "1");
   btn.textContent = isDetail ? "⬇ 下载" : "⬇";
@@ -27,10 +27,22 @@ export function createButton(item, { isDetail, onPick }) {
       "background:rgba(47,107,255,.92);color:#fff;border:none;border-radius:8px;" +
       "padding:5px 10px;font-size:13px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.35);";
   btn.style.display = "none";
-  btn.addEventListener("click", (e) => {
+  // 卡片右上角常被站点自己的 hover 控件（如「稍后再看」）占用，按规则让位
+  if (!isDetail && iconRight != null) btn.style.right = iconRight + "px";
+  // onOpen：占位条目（卡片页只知 bvid）在弹层前现取档位，可能等接口
+  btn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    openPopover(btn, item, onPick);
+    let cur = item;
+    if (onOpen) {
+      try {
+        cur = await onOpen();
+      } catch (err) {
+        return;
+      }
+    }
+    if (!cur || !cur.streams || !cur.streams.length || !btn.isConnected) return;
+    openPopover(btn, cur, (stream) => onPick(stream, cur));
   });
   return btn;
 }

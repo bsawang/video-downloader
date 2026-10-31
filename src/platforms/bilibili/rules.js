@@ -25,9 +25,29 @@ export function readBiliPage(loc = globalThis.location) {
   };
 }
 
+// 首页/搜索/排行/推荐位的卡片只暴露 bvid（cid 要现查），统一从卡片里的视频链接取。
+const CARD_BV = /\/video\/(BV[0-9A-Za-z]{10})/;
+
+export function biliCardBvid(el) {
+  const a = el && el.querySelector ? el.querySelector('a[href*="/video/BV"]') : null;
+  const m = a ? String(a.getAttribute("href") || "").match(CARD_BV) : null;
+  return m ? m[1] : null;
+}
+
+// 卡片标题只是占位（按钮 tooltip / 菜单标题），真实标题以 view 接口为准
+export function biliCardTitle(el) {
+  if (!el || !el.querySelector) return "";
+  for (const sel of [".bili-video-card__info--tit", ".video-card__info-title", ".title"]) {
+    const node = el.querySelector(sel);
+    const text = node && String(node.textContent || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
 export const biliRules = {
   id: "bilibili",
-  matches: ["*://www.bilibili.com/video/*"],
+  matches: ["*://www.bilibili.com/*", "*://search.bilibili.com/*"],
   cdnPattern: /bilivideo\.com|mountaintoys\.cn/,
   ssrSelector: null,
   perfPattern: null,
@@ -45,6 +65,26 @@ export const biliRules = {
       pageScope: /^\/video\//,
       mount: [".bpx-player-video-area", ".bpx-player-container", "self"],
     },
+    // 卡片类：视频Id 用 bvid，cid 与档位在点开时经接口现取（见 adapter.loadItem）
+    // iconRight：卡片右上角是站内「稍后再看」，按钮左移让位
+    { selector: ".bili-video-card", idFrom: biliCardBvid, kind: "card", iconRight: 44, mount: ["self"] },
+    {
+      selector: ".video-card",
+      idFrom: biliCardBvid,
+      kind: "card",
+      iconRight: 44,
+      mount: [".video-card__content", "self"],
+    },
+    { selector: ".rank-item", idFrom: biliCardBvid, kind: "card", iconRight: 44, mount: [".img", "self"] },
+    // 详情页右侧「相关推荐」：结构与首页卡片不同，挂在缩略图上
+    {
+      selector: ".video-page-card-small",
+      idFrom: biliCardBvid,
+      kind: "card",
+      iconRight: 44,
+      mount: [".pic", "self"],
+    },
   ],
   fallback: { title: "B站视频", author: "当前播放", label: "当前清晰度" },
 };
+

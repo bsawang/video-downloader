@@ -51,6 +51,9 @@ PlatformAdapter = {
   resolveDownload(item: VideoItem, stream: Stream): DownloadPlan | Promise<DownloadPlan>, // 允许异步现取直链
   filename?(item: VideoItem, stream: Stream): string, // 平台自定义文件名（B站含分P），缺省用 kernel 规则
   streamToDisk?: boolean,                  // 长视频落盘：true 时走 File System Access，见 M2.2
+  stub?(videoId: string, el: Element, rule: AnchorRule): VideoItem | null, // 只知 id 时先挂占位条目，见 M7.4
+  loadItem?(videoId: string, store: Store): Promise<VideoItem>,            // 点击时补齐占位条目（可能发请求）
+  prefetch?(videoId: string, store: Store): void,                          // hover 预热，失败静默
   anchors: AnchorRule[]                    // 见 M3.1
 }
 Source = { id: string, priority: number, reachableInPage: boolean,
@@ -59,7 +62,8 @@ DomSource = { id: string, scan(root: Document): VideoItem[] }
 AnchorRule = { selector: string, kind: 'card' | 'detail', mount: string[],   // 'self' | CSS 选择器，按序回退
                idFrom: { type: 'attr' | 'idPrefix' | 'className' | 'mediaSrc' | 'innerHref', ... }
                        | ((el: Element) => string | null),                  // 函数形式：DOM 无 id 信号时由平台自行取
-               pageScope?: RegExp, resolve?(el: Element): Element }
+               pageScope?: RegExp, resolve?(el: Element): Element,
+               iconRight?: number }                                       // 列表按钮右偏移 px（让开站内控件）
 ```
 
 ### 2.3 硬边界
@@ -150,6 +154,7 @@ extension/                 冻结，仅回归沙箱
 | M7.1 | M7 | B站详情页识别与清晰度 | 🟢 |
 | M7.2 | M7 | 多分P切换与长视频落盘 | 🟢 |
 | M7.3 | M7 | DASH 高档位分离流下载 | 🟢 |
+| M7.4 | M7 | 卡片页按钮注入（占位挂载 + 现取档位） | 🟢 |
 
 ### 需求树（依赖图）
 
@@ -197,6 +202,10 @@ flowchart TD
     M1.2 --> M7.3
     M2.2 --> M7.3
     M7.1 --> M7.3
+    M1.2 --> M7.4
+    M2.2 --> M7.4
+    M7.1 --> M7.4
+    M7.3 --> M7.4
 ```
 
 ### M1 视频识别与数据采集 🟢
@@ -404,10 +413,10 @@ flowchart TD
 - 错误与边界：旧实现只能作为 oracle，不许在新代码中 import；快照页面若已失效，记录为 skip 并在报告中注明
 - 测试要点：自身即测试
 
-### M7 平台接入（B站详情页）🟢
+### M7 平台接入（B站）🟢
 模块概要：
-- 职责：B站详情页的视频识别、清晰度获取、直链解析、下载命名，全部差异留在本模块
-- 输入：`__INITIAL_STATE__` / `playurl` 接口 / `#bilibili-player`
+- 职责：B站详情页与卡片页的视频识别、清晰度获取、直链解析、下载命名，全部差异留在本模块
+- 输入：详情页 `__INITIAL_STATE__` / 卡片 DOM / `view` 与 `playurl` 接口 / `#bilibili-player`
 - 输出：`bilibiliAdapter`（`PlatformAdapter`）
 - 依赖：M1、M2、M3（契约）
 - 被谁依赖：M6
@@ -448,9 +457,21 @@ flowchart TD
 - 错误与边界：DASH 请求失败不影响单文件档（`Promise.all` 各自 catch）；无 `dash.audio` 时不补分离档；所选 qn 在 DASH 中不存在 → 「该清晰度不可用」；直链约 2 小时过期，点选时现取；不合并音视频（见待定项 #3）。**档位可得性随登录态**：未登录时 `dash.video` 不含 1080（接口 `accept_quality` 仍列 80 但不发流），菜单按实际 `dash.video` 档位补，故不出现死链行；登录非会员可得 1080P，1080P+（qn 112）需大会员。直链为 CDN 签名 URL（含 `deadline`），下载带 `credentials: "omit"` 可行，CDN 校验 `Referer`（浏览器同源策略下自动带上 `https://www.bilibili.com/`）
 - 测试要点：`tests/bilibili.test.mjs`（只补高于单文件档、已含同档不重复、AVC 优先、AAC 最高码率、缺档报错、refresh 两路并发）；真页 CDP：菜单出现 1080P 两条、各落一份、Range `206`
 
+#### M7.4 卡片页按钮注入（占位挂载 + 现取档位）🟢
+- **验收**：`www.bilibili.com` 首页、热门（推荐列表与排行）、`search.bilibili.com`、详情页右侧推荐位，每张带 `/video/BV` 链接的视频卡片 hover 出 ⬇（不与右上角「稍后再看」重叠）；点开菜单列出该视频真实档位（登录态含 1080P 分离流两条）；冷启动点击 ≤2s 出菜单；广告卡（只有 `cm.bilibili.com` 跳转、无 BV）不注入；多分P视频默认只下 P1
+- **依赖**：M1.2、M2.2、M7.1、M7.3
+
+详细设计：
+- 数据流：`scan` 命中卡片规则得到 bvid → `adapter.stub(bvid, el)` 生成空 streams 占位条目并立即挂按钮 → 锚点 `mouseenter` 调 `prefetch(bvid)`：`GET x/web-interface/view?bvid` 取 `pages[0].cid`/标题/作者 → 并发 `playurl`（`fnval=1` 与 `fnval=4048`）→ `biliParsePlayurl` → `store.upsert` → 菜单就绪；点击时 `loadItem(bvid)` 命中 store 直接返回，未命中则现取（toast「正在获取清晰度…」）
+- 接口：`PlatformAdapter.stub?(videoId, el, rule): VideoItem`；`loadItem?(videoId, store): Promise<VideoItem>`；`prefetch?(videoId, store): void`；`AnchorRule.iconRight?: number`（px，仅列表按钮）；kernel `createButton` 增加 `onOpen`（点击时异步取条目）
+- 数据结构：占位条目 `{ videoId: bvid, bvid, title, author: "", streams: [] }`；卡片页 `videoId` 统一用 bvid（详情页仍用 cid）；`cardPending: Map<bvid, Promise>` 并发去重；`renderedIds: WeakMap<el, {videoId, btn}>` 维持复用节点的补挂
+- 算法与规则：`biliCardBvid` 取卡片内首个 `a[href*="/video/BV"]` 的 `BV[0-9A-Za-z]{10}`；`biliCardTitle` 依次尝试 `.bili-video-card__info--tit` / `.video-card__info-title` / `.title`；卡片规则四条——`.bili-video-card`（首页/搜索/推荐流，mount `self`）、`.video-card`（热门列表，mount `.video-card__content`）、`.rank-item`（排行，mount `.img`）、`.video-page-card-small`（详情页推荐位，mount `.pic`）；`iconRight: 44` 让开站内右上角控件；`biliRefresh` 在非 `/video/` 路径直接返回，避免把首页 `__INITIAL_STATE__` 误当播放页；hover 预取读 `renderedIds` 当前映射，节点复用后仍指向正确 bvid
+- 错误与边界：广告卡无 BV → 自然跳过；`view` 或 `playurl` 失败 → 点击时 toast 错误、按钮保留可重试，`finally` 清 `cardPending`；同卡并发点击/hover 只发一轮请求；条目已有 streams 时 `prefetch`/`loadItem` 直接返回；多分P只取 `pages[0]`，不提供分P选择；搜索页 hover 预览播放器可能覆盖卡片，按钮 z-index 与偏移保证仍可点
+- 测试要点：`tests/bilibili.test.mjs`（BV 提取、标题选择器链、四条规则与 iconRight、`biliLoadCard` 三请求+缓存+并发去重+失败可重试、`biliPrefetch` 跳过已有 cid 条目、adapter 暴露 stub/loadItem/prefetch）；真页 CDP：首页 8/8、热门 20/20、排行 100/100、搜索 39–40（广告跳过）、详情推荐位 20/20；hover 预取 3 请求；菜单 4 行；360P 落盘 10,178,574 B
+
 ## 5. 不在范围内
 
-- 新平台接入范围：本轮只做 **B站详情页**（`/video/BV...`）；B站搜索页、个人主页、番剧、直播、互动视频不接；小红书 / YouTube 仍为规划。
+- 新平台接入范围：本轮做 **B站详情页**（`/video/BV...`）与 **卡片页**（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）；B站个人主页、番剧、直播、互动视频不接；小红书 / YouTube 仍为规划。
 - B站音视频**合并**、分段单文件视频（`durl.length > 1`）、登录/大会员能力绕过不在范围内；1080P 及以上以分离流分别下载（M7.3），合并见待定项 #3。
 - 不做 `GM_download`、远程适配下发、独立 UI、常驻后台、MV3 新版本、Web/后端版、签名破解与反爬对抗。
 - `extension/` 仅作回归沙箱，不再发版。
@@ -487,3 +508,4 @@ flowchart TD
 | 2026-10-31 | 新增模块 | 新增 M7「平台接入（B站详情页）」及 M7.1/M7.2；prd 同步新增 M7 与非目标调整 | 用户要求用 CDP 调研开发 B 站播放页下载（先详情页），验证“新增平台 = 新增适配” |
 | 2026-10-31 | 改详细设计 | §2.1 `Stream.url` 改可选、加 `qn`，`DownloadPlan.filename` 改可选；§2.2 adapter 加 `refresh?`/`filename?`/`streamToDisk?`，`resolveDownload` 允许返回 Promise，补 `ssrSelector`/`perfPattern`；M1.2 增加 `refresh` 定时触发；M2.2 增加 File System Access 落盘路径；M6.1 改为多 adapter 拼接、`@match` 并集；关闭待定项 #2（不切 `GM_download`） | B站清晰度与直链都不在 DOM/网络响应/首屏 SSR 里，需 adapter 现取；长视频单文件可达 3GB+，blob 整份驻留内存不可用；同一脚本需同时承载两个平台 |
 | 2026-10-31 | 新增子需求 | 新增 M7.3「DASH 高档位分离流下载」；§2.1 `Stream` 增加 `kind: 'video' \| 'audio'`；新增待定项 #3（音视频合并后置） | 现代视频 `fnval=1` 单文件上限 720P，1080P 只在 DASH；合流成本高，先按画面/音频两次下载满足 1080P 需求 |
+| 2026-10-31 | 新增子需求 | 新增 M7.4「卡片页按钮注入」；§2.2 adapter 增加 `stub?`/`loadItem?`/`prefetch?`，`AnchorRule` 增加 `iconRight?`；M7 模块名由「B站详情页」改为「B站」；§5 范围内加入卡片页 | 实测卡片页不需要播放页：`view?bvid` 跨域可取 cid/标题，playurl 在 www/search 源上带登录态可用；卡片只有 bvid，需占位挂载 + 点击/hover 现取档位 |

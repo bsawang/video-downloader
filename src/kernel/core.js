@@ -7,6 +7,7 @@ import { createDownloader } from "./download.js";
 export function start(adapter) {
   const store = createStore();
   const renderedIds = new WeakMap();
+  const anchorsHooked = new WeakSet();
   let fallbackUrl = null;
   let lastPerfUrl = null;
   let renderTimer = null;
@@ -39,7 +40,13 @@ export function start(adapter) {
         el.querySelectorAll("[data-dl-icon]").forEach((b) => b.remove());
       }
       let item = store.get(videoId);
-      if (!item || !item.streams.length) {
+      // 卡片页只知 bvid：先挂占位条目，档位等 hover 预取或点击时解析
+      let stub = false;
+      if (!item && adapter.stub) {
+        item = adapter.stub(videoId, el, rule) || null;
+        stub = !!item;
+      }
+      if (!item || (!item.streams.length && !stub)) {
         if (!fallbackUrl || rule.kind !== "detail") continue;
         item = {
           videoId,
@@ -54,16 +61,41 @@ export function start(adapter) {
       if (!anchor) continue;
       const btn = createButton(item, {
         isDetail: rule.kind === "detail",
-        onPick: (stream) => {
+        iconRight: rule.iconRight,
+        onOpen:
+          stub && adapter.loadItem
+            ? async () => {
+                toast("正在获取清晰度…");
+                try {
+                  return await adapter.loadItem(videoId, store);
+                } catch (err) {
+                  toast("✗ " + (err && err.message ? err.message : err));
+                  throw err;
+                }
+              }
+            : null,
+        onPick: (stream, activeItem) => {
           toast("开始下载 " + stream.label + " …");
           // 同步进 download：picker 需要用户点击的激活态，异步解析只能包成 Promise 传进去
-          const plan = Promise.resolve().then(() => adapter.resolveDownload(item, stream));
-          const name = adapter.filename ? adapter.filename(item, stream) : undefined;
+          const plan = Promise.resolve().then(() => adapter.resolveDownload(activeItem, stream));
+          const name = adapter.filename ? adapter.filename(activeItem, stream) : undefined;
           download(plan, { streamToDisk: !!adapter.streamToDisk, suggestedName: name });
         },
       });
       anchor.appendChild(btn);
       anchor.setAttribute("data-dl-hover", "1");
+      // hover 预取：等用户点开时档位大概率已到位；节点复用后 videoId 会变，所以每次读当前映射
+      if (adapter.prefetch && !anchorsHooked.has(anchor)) {
+        anchorsHooked.add(anchor);
+        anchor.addEventListener(
+          "mouseenter",
+          () => {
+            const cur = renderedIds.get(el);
+            if (cur && cur.btn && cur.btn.isConnected) adapter.prefetch(cur.videoId, store);
+          },
+          { passive: true }
+        );
+      }
       renderedIds.set(el, { videoId, btn });
       if (item.fallback) fallbackCount++;
       mounted++;

@@ -21,6 +21,32 @@
 | M7.1 | ✅ | 批次 3 |
 | M7.2 | ✅ | 批次 3 |
 | M7.3 | ✅ | 批次 3 |
+| M7.4 | ✅ | 批次 4 |
+
+## v0.10.0 ✅ {spec §M7.4 · B站卡片页按钮注入}
+- 需求：确认下载链接不依赖播放页；首页 / 热门 / 排行 / 搜索 / 详情页推荐位可直接出按钮与档位（用户确认范围；多分P卡片默认只下 P1）
+- 调研（登录态真页 + 接口实证）：
+  - 卡片只要 bvid：`x/web-interface/view?bvid=` 返回 `pages[0].cid`、`title`、`owner.name`；随后两路 `playurl` 与详情页完全相同（`fnval=1` 低档 + `fnval=4048` DASH 高档），`credentials: include`，在 www 与 search 源上均可用
+  - DOM 结构：首页/搜索 `.bili-video-card`（309×249）、热门 `.video-card`（638×116，缩略图 `.video-card__content` 206×116）、排行 `.rank-item`（缩略图 `.img` 206×116）、详情页推荐位 `.video-page-card-small`（411×107，缩略图 `.pic` 189×107）
+  - 搜索页 42 张卡里 3 张是广告（只含 `cm.bilibili.com` 跳转、无 `/video/BV`），自然跳过；卡片右上角有站内「稍后再看」，按钮与之重叠会挡住该控件
+  - 性能：批量 `view` 13 次 227 ms 全 `code 0`；冷点击包含 3 个请求，首页/热门实测 1s 左右
+- 改动：
+  - `src/platforms/bilibili/rules.js`：`matches` 扩到 `www.bilibili.com/*` 与 `search.bilibili.com/*`；新增 `biliCardBvid` / `biliCardTitle`；新增 4 条卡片锚点（`.bili-video-card` / `.video-card` / `.rank-item` / `.video-page-card-small`），`iconRight: 44` 让开「稍后再看」
+  - `src/platforms/bilibili/adapter.js`：`biliLoadCard(bvid, store)`（view → 两路 playurl → 解析 → upsert，`cardPending` 并发去重）；`biliStub` 占位条目；`biliPrefetch`；`biliRefresh` 在非 `/video/` 路径直接返回；`biliParsePlayurl` 的 `videoId` 支持外部传入（卡片用 bvid）
+  - kernel：`createButton` 支持 `onOpen`（点击时异步取条目）与 `iconRight`（列表按钮右偏移）；`renderAll` 支持 `adapter.stub` 占位挂载；锚点 `mouseenter` 调 `adapter.prefetch`
+  - 版本 0.9.0 → **0.10.0**
+- 单测：`npm test` **55 pass / 0 fail**（新增 15 例：BV 提取/标题链/4 条规则与 iconRight、`biliLoadCard` 三请求+缓存+并发去重+失败可重试、prefetch、stub、契约）
+- 真页收点（用户 Chrome CDP，登录态，注入等价构建）：
+  - 首页：8/8 卡片出按钮；hover 触发 `view?bvid` + `fnval=1` + `fnval=4048`；冷点击菜单 4 行；360P 落盘 **5 771 802 B**、文件名正常
+  - 热门：20/20；冷点击 1353 ms 出菜单（4 行）
+  - 排行（`/v/popular/rank/all`）：100 个 `.rank-item` → 100 个按钮；hover 预取 3 请求；菜单 4 行
+  - 搜索：42 张卡 → 39–40 个按钮（广告卡跳过，随机波动为卡片加载）；按钮 x 579–612、站内「稍后再看」x 620–648，两者不重叠且都可点；单击出菜单 4 行
+  - 详情页推荐位：20/20；hover 预取后单击出菜单 4 行；360P 落盘 **10 178 574 B**、toast `✓ 下载完成`（字节数用页面内内存 writer 桩观测，收点后 reload 复原原生 picker）
+  - 详情页播放器按钮回归：菜单仍为 1080P 画面/音频/720P/360P 四行
+  - 期间发现并修正：`iconRight` 让位前按钮压住「稍后再看」，且重叠区点击会先被站内控件吃掉
+- 构建：`npm run build` → `dist/douyin.user.js` **39 927 B（39.0 KB）**，`node --check` 通过，头 `@version 0.10.0`、`@match` 三条
+- 发版：待补
+- 未覆盖：卡片页拿不到分P列表，多分P只下 P1；广告卡不注入；1080P 合流仍走待定项 #3
 
 ## v0.9.0 ✅ {spec §M7.3 · B站 DASH 分离流档位}
 - 需求：现代视频单文件接口（`fnval=1`）上限 720P，1080P 只在 DASH；先提供「画面 / 音频」两条分流链接，合流留给下载后处理队列（待定项 #3）

@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readBiliPage } from "../src/platforms/bilibili/rules.js";
+import { biliCardBvid, biliCardTitle, biliRules, readBiliPage } from "../src/platforms/bilibili/rules.js";
 import {
   biliFilename,
+  biliLoadCard,
   biliParsePlayurl,
+  biliPrefetch,
   biliResolveDownload,
   biliRefresh,
+  biliStub,
   bilibiliAdapter,
   buildBiliDashStreams,
   buildBiliStreams,
@@ -327,4 +330,175 @@ test("bilibiliAdapter 走单文件 + 落盘，且不带 SSR/perf 源", () => {
   assert.deepEqual(bilibiliAdapter.sources, []);
   assert.equal(typeof bilibiliAdapter.filename, "function");
   assert.equal(typeof bilibiliAdapter.refresh, "function");
+});
+
+// ---- 卡片页（首页/热门/排行/搜索）：只有 bvid，cid 与档位现查 ----
+
+function fakeCard(html) {
+  return {
+    querySelector(sel) {
+      if (sel.includes("a[href")) {
+        return html.href ? { getAttribute: () => html.href } : null;
+      }
+      return html[sel] ? { textContent: html[sel] } : null;
+    },
+  };
+}
+
+test("biliCardBvid 从卡片链接取 bvid（协议相对/带参数）", () => {
+  assert.equal(biliCardBvid(fakeCard({ href: "//www.bilibili.com/video/BV1m9HG6gEQm?trackid=x" })), "BV1m9HG6gEQm");
+  assert.equal(biliCardBvid(fakeCard({ href: "https://www.bilibili.com/video/BV1JYsd6sE4k/" })), "BV1JYsd6sE4k");
+  assert.equal(biliCardBvid(fakeCard({})), null);
+  assert.equal(biliCardBvid(null), null);
+});
+
+test("biliCardTitle 依次尝试首页/热门/排行标题选择器", () => {
+  assert.equal(biliCardTitle(fakeCard({ ".bili-video-card__info--tit": " 首页标题 " })), "首页标题");
+  assert.equal(biliCardTitle(fakeCard({ ".video-card__info-title": "热门标题" })), "热门标题");
+  assert.equal(biliCardTitle(fakeCard({ ".title": "排行标题" })), "排行标题");
+  assert.equal(biliCardTitle(fakeCard({})), "");
+});
+
+test("biliRules 覆盖卡片页：www 全站 + 搜索站，四条卡片规则", () => {
+  assert.deepEqual(biliRules.matches, ["*://www.bilibili.com/*", "*://search.bilibili.com/*"]);
+  const kinds = biliRules.anchors.map((a) => a.kind);
+  assert.deepEqual(kinds, ["detail", "card", "card", "card", "card"]);
+  const cardSel = biliRules.anchors.filter((a) => a.kind === "card").map((a) => a.selector);
+  assert.deepEqual(cardSel, [
+    ".bili-video-card",
+    ".video-card",
+    ".rank-item",
+    ".video-page-card-small",
+  ]);
+  // 卡片按钮让开右上角站内控件
+  assert.ok(biliRules.anchors.filter((a) => a.kind === "card").every((a) => a.iconRight === 44));
+});
+
+function mockCardApi({ viewCode = 0 } = {}) {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes("/web-interface/view")) {
+      return {
+        json: async () =>
+          viewCode === 0
+            ? {
+                code: 0,
+                data: {
+                  title: "卡片标题",
+                  owner: { name: "卡片UP" },
+                  pages: [
+                    { page: 1, cid: 999, part: "P1" },
+                    { page: 2, cid: 1000, part: "P2" },
+                  ],
+                },
+              }
+            : { code: -404, message: "啥都木有" },
+      };
+    }
+    if (String(url).includes("fnval=4048")) {
+      return {
+        json: async () => ({
+          code: 0,
+          data: {
+            accept_quality: [80, 64, 16],
+            accept_description: ["高清 1080P", "高清 720P", "流畅 360P"],
+            dash: {
+              video: [{ id: 80, codecid: 7, bandwidth: 3000, baseUrl: "https://cdn/v80" }],
+              audio: [{ id: 30280, bandwidth: 193, baseUrl: "https://cdn/a80" }],
+            },
+          },
+        }),
+      };
+    }
+    return {
+      json: async () => ({
+        code: 0,
+        data: { accept_quality: [64, 16], accept_description: ["高清 720P", "流畅 360P"] },
+      }),
+    };
+  };
+  return calls;
+}
+
+test("biliLoadCard 依次查 view 与两路 playurl，并写入 store", async () => {
+  const realFetch = globalThis.fetch;
+  const calls = mockCardApi();
+  try {
+    const store = createStore();
+    const item = await biliLoadCard("BV1card", store);
+    assert.equal(calls.length, 3);
+    assert.match(calls[0], /web-interface\/view\?bvid=BV1card/);
+    assert.match(calls[1], /bvid=BV1card/);
+    assert.equal(item.videoId, "BV1card");
+    assert.equal(item.cid, "999");
+    assert.equal(item.pageCount, 2);
+    assert.equal(item.title, "卡片标题");
+    assert.equal(item.author, "卡片UP");
+    assert.deepEqual(
+      item.streams.map((s) => s.label),
+      ["高清 1080P 画面（无音轨）", "高清 1080P 音频", "高清 720P", "流畅 360P"]
+    );
+    assert.equal(store.get("BV1card").streams.length, 4);
+    await biliLoadCard("BV1card", store);
+    assert.equal(calls.length, 3);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("biliLoadCard 并发同一 bvid 只发一轮请求", async () => {
+  const realFetch = globalThis.fetch;
+  const calls = mockCardApi();
+  try {
+    const store = createStore();
+    await Promise.all([biliLoadCard("BV1card", store), biliLoadCard("BV1card", store)]);
+    assert.equal(calls.length, 3);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("biliLoadCard 接口失败时报错且允许重试", async () => {
+  const realFetch = globalThis.fetch;
+  let calls = mockCardApi({ viewCode: -404 });
+  try {
+    const store = createStore();
+    await assert.rejects(() => biliLoadCard("BV1gone", store), /啥都木有/);
+    assert.equal(calls.length, 1);
+    await assert.rejects(() => biliLoadCard("BV1gone", store), /啥都木有/);
+    assert.equal(calls.length, 2);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("biliPrefetch 只处理 bvid，不碰详情页的 cid", async () => {
+  const realFetch = globalThis.fetch;
+  const calls = mockCardApi();
+  try {
+    const store = createStore();
+    biliPrefetch("43140253613", store);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(calls.length, 0);
+    biliPrefetch("BV1card", store);
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(store.get("BV1card").streams.length, 4);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("biliStub 只带 bvid 与 DOM 标题，不带档位", () => {
+  const stub = biliStub("BV1card", fakeCard({ ".bili-video-card__info--tit": "占位标题" }));
+  assert.equal(stub.videoId, "BV1card");
+  assert.equal(stub.title, "占位标题");
+  assert.deepEqual(stub.streams, []);
+});
+
+test("bilibiliAdapter 暴露卡片页钩子", () => {
+  assert.equal(typeof bilibiliAdapter.stub, "function");
+  assert.equal(typeof bilibiliAdapter.loadItem, "function");
+  assert.equal(typeof bilibiliAdapter.prefetch, "function");
 });
