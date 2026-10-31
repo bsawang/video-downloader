@@ -22,6 +22,32 @@
 | M7.2 | ✅ | 批次 3 |
 | M7.3 | ✅ | 批次 3 |
 | M7.4 | ✅ | 批次 4 |
+| M8.1 | ✅ | 批次 5 |
+| M8.2 | ✅ | 批次 5 |
+| M8.3 | ✅ | 批次 5 |
+
+## v0.11.0 ✅ {spec §M8 · 小红书平台接入}
+- 需求：继续增加小红书（M8.1 详情页 / M8.2 卡片页 / M8.3 直链现取）
+- 调研（未登录真页 + 页面状态实证）：
+  - 发现页 `/explore`：30 张 `.note-item`，视频卡带 `.play-icon`；卡片 `data-note-id` + `a.cover` 链接里的 `xsec_token`
+  - 详情页 `/explore/<24位id>?xsec_token=...` 与旧路径 `/discovery/item/<id>`；从卡片点开是盖在发现页上的 `#noteContainer`（`.player-container` > `.xgplayer` > `video`），xgplayer 控制条都在底部
+  - 档位：`__INITIAL_STATE__.note.noteDetailMap[id].note.video.media.stream` 按编码分组（EF4/EF5/EF6/EF7，部分为空），条目含 `width/height/avgBitrate/masterUrl/streamDesc`；EF4 为 H.264、EF5 常带更高档
+  - 卡片页没有档位，只有 id 与令牌：`GET /explore/<id>?xsec_token=<token>` 返回的 HTML 里内联同一份状态；不带令牌服务端回「页面不见了」
+  - CDN：`sns-video-v4.xhscdn.com` 签名直链，`credentials: omit` 可用；部分笔记下发 `http://`，https 页面上 fetch 会被混合内容拦截，同签名换 https 返回 `206 video/mp4`
+  - 访客态会被登录弹层（`.login-container` 等）盖住播放器，hover 揭示失效；移除弹层后一切正常（测试环境行为，不是代码问题）
+- 改动：
+  - 新增 `src/platforms/xiaohongshu/rules.js` / `adapter.js`（命名统一 `xhs` 前缀）
+  - `src/entry/tm.js` 与 `tools/build.mjs`：接入第三份 adapter，`@match` 并入 `*://www.xiaohongshu.com/*`，`@description` 加小红书
+  - 详情：`xhsRefresh` 遍历 `noteDetailMap` 写 store；锚点 `#noteContainer` 挂 `.player-container`（跟随右侧面板收窄），`pos {top:12,right:12}`
+  - 卡片：`xhsStub` 从 DOM 取标题/作者与令牌并记住 → `prefetch/loadItem` 用令牌取笔记页 HTML → `xhsStateFromHtml` 解析（裸 `undefined/NaN` 兜底）
+  - 直链：点选时按 id/令牌重取；`xhsBuildStreams` 把 `http://` 升 `https://`；文件名 `作者_标题_<label>.mp4`
+  - 版本 0.10.2 → **0.11.0**
+- 单测：`npm test` **75 pass / 0 fail**（新增 `tests/xiaohongshu.test.mjs` 22 例）
+- 真页收点（用户 Chrome CDP，未登录，注入等价构建）：
+  - 详情页 `6ac31b54…`：`{candidates:1, anchors:12, mounted:12, downloadable:1}`；按钮 91×37 @ (936,44)，播放器 (441,32,599,799)，右/顶间距均 12；菜单 `[1080p, 720p]`；点选后 CDN 请求带签名、无 Cookie，Range `206 / video/mp4 / ftyp`
+  - 发现页 `/explore`：30 张卡中 12 张视频卡全部挂按钮（图文卡 0）；hover 后 `candidates 0→1 / downloadable 0→1`；按钮 38×25 @ (898,237)（卡片右缩进 8）；菜单 `[1080p, 720p]`
+  - 卡片点选 `1080p`：请求为 `https://sns-video-v4.xhscdn.com/...sign=...`，传输 **139 056 187 B**（http 直链版本实测 `Failed to fetch`，升 https 后成功）
+- 未覆盖：搜索页 `/search_result` 与个人主页需登录，本轮未验证；图文笔记不注入（设计如此）
 
 ## 快道 v0.10.2 ✅ {spec §7 · 对照 M7.1 详情按钮位置}
 - 缺陷（用户真页反馈）：B站详情页下载按钮固定在播放器右下（`right:16px; bottom:16px`），压住底部控制条（全屏/网页全屏等）；要求移到右上、站内「反馈」按钮左侧

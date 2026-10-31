@@ -96,6 +96,8 @@ src/platforms/douyin/rules.js    抖音全部常量与规则
 src/platforms/douyin/adapter.js  parse / normalizeStreams / resolveDownload
 src/platforms/bilibili/rules.js     B站全部常量、页面状态读取、锚点规则
 src/platforms/bilibili/adapter.js   清晰度现取 / 直链解析 / 文件名 / refresh
+src/platforms/xiaohongshu/rules.js    小红书全部常量、页面状态读取、锚点规则
+src/platforms/xiaohongshu/adapter.js  笔记页现取 / 令牌缓存 / 直链解析 / 文件名 / refresh
 src/entry/tm.js            按 URL 选 adapter 并调 start(adapter)
 tools/build.mjs            ESM 拼接为单文件 user.js（合并各 adapter 的 @match）
 tools/probe.mjs            CDP 四指标（阶段 0 仅骨架）
@@ -117,7 +119,7 @@ extension/                 冻结，仅回归沙箱
 
 ### 3.5 约定
 - ESM：每个模块只做命名导出，构建器剥离 `import`/`export` 后按固定拓扑序拼接。
-- 命名：kernel 内函数不与平台词汇混用；平台词汇只允许出现在 `src/platforms/**`。因构建产物是单一作用域，各平台模块的顶层函数名必须全局唯一（B站侧统一 `bili` 前缀）。
+- 命名：kernel 内函数不与平台词汇混用；平台词汇只允许出现在 `src/platforms/**`。因构建产物是单一作用域，各平台模块的顶层函数名必须全局唯一（B站侧统一 `bili` 前缀，小红书侧统一 `xhs` 前缀）。
 - 日志：kernel 用 `log(level, ...)` 包装 `console`，默认 `warn` 以上输出；调试开关 `globalThis.__DL_DEBUG`。
 - 测试组织：`tests/<module>.test.mjs`，fixture 放 `tests/fixtures/`。
 
@@ -156,6 +158,9 @@ extension/                 冻结，仅回归沙箱
 | M7.2 | M7 | 多分P切换与长视频落盘 | 🟢 |
 | M7.3 | M7 | DASH 高档位分离流下载 | 🟢 |
 | M7.4 | M7 | 卡片页按钮注入（占位挂载 + 现取档位） | 🟢 |
+| M8.1 | M8 | 笔记详情页识别与清晰度 | 🟢 |
+| M8.2 | M8 | 卡片页占位挂载与令牌现取 | 🟢 |
+| M8.3 | M8 | 签名直链现取与 http→https 升级 | 🟢 |
 
 ### 需求树（依赖图）
 
@@ -207,6 +212,21 @@ flowchart TD
     M2.2 --> M7.4
     M7.1 --> M7.4
     M7.3 --> M7.4
+    M1 --> M8
+    M2 --> M8
+    M3 --> M8
+    M4 --> M8
+    M6 --> M8
+    M1.2 --> M8.1
+    M2.1 --> M8.1
+    M3.1 --> M8.1
+    M1.2 --> M8.2
+    M3.1 --> M8.2
+    M3.2 --> M8.2
+    M2.1 --> M8.3
+    M2.2 --> M8.3
+    M8.1 --> M8.3
+    M8.2 --> M8.3
 ```
 
 ### M1 视频识别与数据采集 🟢
@@ -470,9 +490,53 @@ flowchart TD
 - 错误与边界：广告卡无 BV → 自然跳过；`view` 或 `playurl` 失败 → 点击时 toast 错误、按钮保留可重试，`finally` 清 `cardPending`；同卡并发点击/hover 只发一轮请求；条目已有 streams 时 `prefetch`/`loadItem` 直接返回；多分P只取 `pages[0]`，不提供分P选择；搜索页 hover 预览播放器可能覆盖卡片，按钮 z-index 与偏移保证仍可点
 - 测试要点：`tests/bilibili.test.mjs`（BV 提取、标题选择器链、四条规则与 iconRight、`biliLoadCard` 三请求+缓存+并发去重+失败可重试、`biliPrefetch` 跳过已有 cid 条目、adapter 暴露 stub/loadItem/prefetch）；真页 CDP：首页 8/8、热门 20/20、排行 100/100、搜索 39–40（广告跳过）、详情推荐位 20/20；hover 预取 3 请求；菜单 4 行；360P 落盘 10,178,574 B
 
+### M8 平台接入（小红书）🟢
+模块概要：
+- 职责：小红书笔记详情页/弹层与发现页视频卡片的识别、清晰度获取、直链解析、下载命名，全部差异留在本模块
+- 输入：页面内联 `__INITIAL_STATE__`（`note.noteDetailMap`）/ 卡片 DOM（`section.note-item[data-note-id]`、`a.cover` 上的 `xsec_token`）/ 同源笔记页 HTML
+- 输出：`xiaohongshuAdapter`（`PlatformAdapter`）
+- 依赖：M1、M2、M3（契约）
+- 被谁依赖：M6
+
+#### M8.1 笔记详情页识别与清晰度 🟢
+- **验收**：打开 `https://www.xiaohongshu.com/explore/<24位id>?xsec_token=...`（或从发现页点开弹层）后，播放器右上 12px 处出现 **⬇ 下载**（不压 xgplayer 底部控制条）；点开菜单列出的档位与 `note.video.media.stream` 中真实条目一致、按清晰度降序、同分辨率优先 EF4；图文笔记的 `#noteContainer` 不挂按钮；页面无 pageerror
+- **依赖**：M1.2、M2.1、M3.1
+
+详细设计：
+- 数据流：entry 按 `matches` 选中 `xiaohongshuAdapter` → `start()` → 500ms / 每 2000ms `refresh` → `xhsRefresh` 遍历 `__INITIAL_STATE__.note.noteDetailMap` → 视频笔记 `xhsNoteToItem` → `store.upsert` → `renderAll` 用 `#noteContainer` 规则（`idFrom` = 路径 id 且状态里是视频笔记）→ `mount` 依次取 `.player-container` / `.media-container` / `self` → `pos = { top: 12, right: 12 }`
+- 接口：`xhsNoteIdFromPath(pathname): string|null`；`xhsTokenFromLocation(): string`；`xhsDetailMap()`；`xhsStateNote(id)`；`xhsIsVideoNote(note)`；`xhsBuildStreams(video): Stream[]`；`xhsNoteToItem(note, fallbackId?)`；`xhsRefresh(store): Promise<void>`
+- 数据结构：`Stream { label, url }`（`url` 已归一为 https）；`VideoItem { videoId: noteId, title: note.title || note.desc(80), author: note.user.nickname, streams }`；`xhsTokens: Map<id, token>`（平台内部）
+- 算法与规则：label 取 `min(width,height) + "p"`（竖屏 720×1280 记 720p）；同一 label 按 `CODEC_RANK`（EF4=0 H.264、EF5=1 HEVC、其余=2）优先、同编码取 `avgBitrate` 更高者；排序复用 `sortStreams`；详情按钮挂播放器容器（右侧面板展开时收窄的是播放器，按钮随之移动），右上 12px 避开底部控件条
+- 错误与边界：直开详情页时 `noteDetailMap` 晚于首帧就绪 → `idFrom` 返回 null 不挂按钮，2s 内随 refresh 自愈；图文/无 `video` 的笔记不写 store；`#noteContainer` 在发现页也存在但路径不是笔记页 → `idFrom` 自然为 null；`note.noteId` 缺失时用路径 id 兜底
+- 测试要点：`tests/xiaohongshu.test.mjs`（路径解析、竖屏短边命名、EF4 优先、跨编码补档、缺链/缺尺寸跳过、`xhsIsVideoNote`/`xhsNoteToItem`、规则与 `pos`）；真页 CDP（`6ac31b54…`）：`{candidates:1, anchors:12, mounted:12, downloadable:1}`；按钮 91×37 @ (936,44)，播放器 (441,32,599,799)，间距 12/12，点中心命中 `BUTTON`
+
+#### M8.2 卡片页占位挂载与令牌现取 🟢
+- **验收**：发现页（`/explore`）每张视频笔记卡（`.note-item` 内含 `.play-icon`）hover 出 ⬇（右上 8px，不遮站内控件），图文卡不注入；hover 后 ≤2s 菜单列出该笔记真实档位；冷启动直接点按钮时先 toast「正在获取清晰度…」再出菜单；卡片无 `xsec_token` 且页面状态里没有该笔记时不挂按钮
+- **依赖**：M1.2、M3.1、M3.2
+
+详细设计：
+- 数据流：`scan` 命中 `.note-item` 且卡片有 `.play-icon` → `xhsStub` 取 DOM 标题/作者与 `a[href*=xsec_token]` 令牌（记住）→ 立即挂按钮 → 锚点 `mouseenter` 调 `xhsPrefetch` → `xhsLoadNote`：页面状态命中直接转条目；否则 `GET /explore/<id>?xsec_token=<token>`（同源，`credentials: include`）→ `xhsStateFromHtml` 取内联状态 → 校验视频类型 → `xhsNoteToItem` → `store.upsert`
+- 接口：`xhsStub(videoId, el, rule)`；`xhsLoadNote(id, store): Promise<VideoItem>`；`xhsPrefetch(videoId, store): void`；`xhsFetchNote(id, token): Promise<note>`；`xhsCardToken/Title/Author(el)`；`xhsNoteUrl(id, token)`；`xhsStateFromHtml(html)`
+- 数据结构：占位条目 `{ videoId: noteId, title, author, streams: [] }`；`xhsTokens: Map<noteId, token>`；`xhsPending: Map<noteId, Promise>` 并发去重
+- 算法与规则：令牌从卡片链接 `xsec_token` 解码后只存不拼 DOM；笔记页 HTML 中的 `window.__INITIAL_STATE__` 是 JS 字面量（含裸 `undefined/NaN/Infinity`），先严格 `JSON.parse`，失败再把“值位置”上的裸字面量替换为 `null` 重试；卡片 `videoId` 统一用 `data-note-id`；同一 id 并发只发一轮请求，成功后写 store，失败清 pending 允许重试；`prefetch` 遇已有 streams 直接返回
+- 错误与边界：无令牌且状态无该笔记 → `stub` 返回 null（不挂按钮，避免点了才知道失败）；令牌缺失/失效时服务端返回「页面不见了」→ `xhsFetchNote` 抛「获取视频信息失败」；图文笔记 → 「该笔记不是视频」；`fetch` 非 2xx → `HTTP <status>`；hover 预取失败静默（不打扰浏览），点击时再报错
+- 测试要点：`tests/xiaohongshu.test.mjs`（令牌解码、标题/作者选择器、裸字面量状态解析、`xhsLoadNote` 请求 URL/缓存/并发合并/失败可重试/状态就绪不发请求、`xhsPrefetch` 跳过已有档位、`xhsStub` 卡片-详情-null 三态）；真页 CDP（`/explore`）：30 张卡中 12 张视频卡全部挂按钮、图文卡 0；hover 后 `candidates 0→1`、`downloadable 0→1`，按钮 38×25 @ (898,237) 对应卡片右上 8px；菜单 2 档（1080p/720p）
+
+#### M8.3 签名直链现取与 http→https 升级 🟢
+- **验收**：点选任一档后发出的请求是该笔记的 CDN 直链（带 `sign` 等签名参数、不带 Cookie），`Range: bytes=0-1023` 返回 `206` 与 `video/mp4`；服务端给 `http://` 直链时实际请求为 `https://` 且成功；重新解析失败时退回菜单里的旧链，仍无可用直链则 toast「该清晰度不可用」；文件名形如 `作者_标题_1080p.mp4`
+- **依赖**：M2.1、M2.2、M8.1
+
+详细设计：
+- 数据流：`onPick` → `xhsResolveDownload(item, stream)`：页面状态命中 → 直接 `xhsBuildStreams`；否则用记住的令牌重取笔记页 → 按 `label` 找新链 → 命中即用、未命中退回 `stream.url` → `download(planPromise)` → kernel `nativeFetch` 取流 → blob 落盘（`streamToDisk` 未开）
+- 接口：`xhsResolveDownload(item, stream): Promise<DownloadPlan>`；`xhsFilename(item, stream): string`；`xhsBuildStreams(video)`
+- 数据结构：`DownloadPlan { url, credentials: "omit", filename }`；不预存 `qn`（小红书按 `label` 匹配）
+- 算法与规则：文件名 `[author, title, label].join("_")` → `sanitizeName` → 空白折叠 → 截 120 字符 + `.mp4`；`xhsBuildStreams` 把 `http://` 前缀统一换成 `https://`（https 页面上 fetch http 直链会被混合内容拦截，同主机同签名的 https 可用，实测 206）
+- 错误与边界：签名直链有时效 → 点选时重取，取不到用菜单旧链；两路都没有 → 「该清晰度不可用」；CDN 非 2xx → kernel toast「下载失败：HTTP <status>」；大文件整份进内存（小红书短视频，不做落盘分块）
+- 测试要点：`tests/xiaohongshu.test.mjs`（重取新链/退回旧链/两路皆无报错、http→https、文件名）；真页 CDP：卡片 `1080p` 点选后请求 `https://sns-video-v4.xhscdn.com/...sign=...` 传输 139,056,187 B；直链 Range 校验 `206 / video/mp4 / ftyp`
+
 ## 5. 不在范围内
 
-- 新平台接入范围：本轮做 **B站详情页**（`/video/BV...`）与 **卡片页**（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）；B站个人主页、番剧、直播、互动视频不接；小红书 / YouTube 仍为规划。
+- 新平台接入范围：本轮做 **B站详情页**（`/video/BV...`）与 **卡片页**（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）、**小红书**发现页卡片与笔记详情页（`/explore/<id>`、`/discovery/item/<id>`，含卡片弹层）；B站个人主页、番剧、直播、互动视频不接；小红书搜索页与个人主页需登录、暂不验证，图文笔记无视频可下；YouTube 仍为规划。
 - B站音视频**合并**、分段单文件视频（`durl.length > 1`）、登录/大会员能力绕过不在范围内；1080P 及以上以分离流分别下载（M7.3），合并见待定项 #3。
 - 不做 `GM_download`、远程适配下发、独立 UI、常驻后台、MV3 新版本、Web/后端版、签名破解与反爬对抗。
 - `extension/` 仅作回归沙箱，不再发版。
@@ -512,4 +576,5 @@ flowchart TD
 | 2026-10-31 | 新增模块 | 新增 M7「平台接入（B站详情页）」及 M7.1/M7.2；prd 同步新增 M7 与非目标调整 | 用户要求用 CDP 调研开发 B 站播放页下载（先详情页），验证“新增平台 = 新增适配” |
 | 2026-10-31 | 改详细设计 | §2.1 `Stream.url` 改可选、加 `qn`，`DownloadPlan.filename` 改可选；§2.2 adapter 加 `refresh?`/`filename?`/`streamToDisk?`，`resolveDownload` 允许返回 Promise，补 `ssrSelector`/`perfPattern`；M1.2 增加 `refresh` 定时触发；M2.2 增加 File System Access 落盘路径；M6.1 改为多 adapter 拼接、`@match` 并集；关闭待定项 #2（不切 `GM_download`） | B站清晰度与直链都不在 DOM/网络响应/首屏 SSR 里，需 adapter 现取；长视频单文件可达 3GB+，blob 整份驻留内存不可用；同一脚本需同时承载两个平台 |
 | 2026-10-31 | 新增子需求 | 新增 M7.3「DASH 高档位分离流下载」；§2.1 `Stream` 增加 `kind: 'video' \| 'audio'`；新增待定项 #3（音视频合并后置） | 现代视频 `fnval=1` 单文件上限 720P，1080P 只在 DASH；合流成本高，先按画面/音频两次下载满足 1080P 需求 |
+| 2026-10-31 | 新增模块 | 新增 M8「平台接入（小红书）」及 M8.1/M8.2/M8.3；§3.2 目录加入 `platforms/xiaohongshu/*`；§5 范围加入发现页卡片与笔记详情页 | 用户要求继续增加小红书。该站无公开播放接口：详情数据在页面内联 `__INITIAL_STATE__`，卡片只有 id 与 `xsec_token`，档位需按令牌取同源笔记页 HTML；签名链会下发 http，需升 https 才能绕过混合内容拦截 |
 | 2026-10-31 | 新增子需求 | 新增 M7.4「卡片页按钮注入」；§2.2 adapter 增加 `stub?`/`loadItem?`/`prefetch?`，`AnchorRule` 增加 `iconRight?`；M7 模块名由「B站详情页」改为「B站」；§5 范围内加入卡片页 | 实测卡片页不需要播放页：`view?bvid` 跨域可取 cid/标题，playurl 在 www/search 源上带登录态可用；卡片只有 bvid，需占位挂载 + 点击/hover 现取档位 |
