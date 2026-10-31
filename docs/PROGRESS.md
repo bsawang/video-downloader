@@ -18,6 +18,30 @@
 | M5.1 | ✅ | 批次 1 |
 | M6.1 | ✅ | 批次 1 |
 | M3.3 | ✅ | 批次 2 |
+| M7.1 | ✅ | 批次 3 |
+| M7.2 | ✅ | 批次 3 |
+
+## v0.8.0 ✅ {spec §M7 · B站详情页}
+- 需求：B 站播放页（`/video/BV...`）无水印下载，先做详情页；B 站以长视频为主
+- 调研（真页 CDP + 源码/接口实证）：
+  - 清晰度不在 DOM、不在 `__playinfo__`（首屏 SSR，切 P 后不更新）；以顶层 `__INITIAL_STATE__.p/.cid` 为准（`videoData.cid` 恒为第 1P）
+  - 旧版 `api.bilibili.com/x/player/playurl?...&fnval=1&qn=127`（`credentials: include`）返回单文件 `durl[]` 与真实的 `accept_quality/accept_description`；DASH（`fnval=4048`）音视频分离，浏览器内无法合并
+  - 档位上限随账号/视频变化（未登录常见 720P 上限，登录/VIP 提高），所以档位表必须从接口取，不能写死
+  - 长视频单文件实测 3,482,563,020 B（4 小时），blob 会整份驻留内存
+- 改动：
+  - 新增 `src/platforms/bilibili/{rules,adapter}.js`：`readBiliPage`、`biliPlayurlUrl`、`buildBiliStreams`、`biliResolveDownload`（点选现取直链）、`biliFilename`（多分P含 `P<n> <分P名>`）、`biliRefresh`（每 cid 一次，失败 5s 不重试）
+  - kernel：`adapter.refresh` 定时钩子；`resolveDownload` 允许返回 Promise；`adapter.filename`；`streamToDisk`（`showSaveFilePicker` 先同步弹、再等直链 Promise，逐块写盘）
+  - `src/entry/tm.js` 按 `matches` 选 adapter；`tools/build.mjs` 合并两平台 `@match`、ORDER 加 B站两文件；产物名/更新别名不变
+  - 版本 0.7.3 → **0.8.0**
+- 单测：`npm test` **40 pass / 0 fail**（新增 `tests/bilibili.test.mjs` 10 例；`tests/download.test.mjs` 增 Promise 计划、落盘字节、picker 取消三例）
+- 真页收点（CDP 长连接，注入等价构建）：
+  - 详情页播放器右下出 ⬇ 下载；hover 揭示正常；弹层档位 `[1080P, 720P, 360P]`（当前账号可达上限）
+  - 选取后保存对话框 → 落盘 **2,350,008 B**，与服务端 `content-range` 总长全等；CDN 响应 `206 video/mp4`
+  - 多分P：P3 → P1 后菜单与文件名跟随当前 P（标题/分P名/档位）
+  - 抖音回归：`__dlStats` 与按钮数正常（kernel 改动未破坏原平台）
+  - 收点后停掉本地注入服务并 reload；`addScriptToEvaluateOnNewDocument` 在本次 Chrome 生命周期内仍存在但资源不可达，重启 Chrome 后彻底清除
+- 构建：`npm run build` → `dist/douyin.user.js` **29,899 B（27.5 KB）**，`node --check` 通过，头含 `0.8.0` + 两条 `@match`
+- 未覆盖：B站搜索页/个人主页/番剧/直播未接；DASH 专属档位与分段视频（`durl.length > 1`）明确提示不支持；未登录下的档位上限是平台策略，非提取缺陷
 
 ## 快道 v0.7.3 ✅ {spec §7 · 对照 M3.1 锚点挂载}
 - 问题：播放页自动跳转后右侧列表按钮消失——页面重渲染把外来的按钮节点清掉，而 `renderedIds` 只记 `videoId`，判定「已挂载」后不再补

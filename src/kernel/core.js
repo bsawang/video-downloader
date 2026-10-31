@@ -56,7 +56,10 @@ export function start(adapter) {
         isDetail: rule.kind === "detail",
         onPick: (stream) => {
           toast("开始下载 " + stream.label + " …");
-          download(adapter.resolveDownload(item, stream));
+          // 同步进 download：picker 需要用户点击的激活态，异步解析只能包成 Promise 传进去
+          const plan = Promise.resolve().then(() => adapter.resolveDownload(item, stream));
+          const name = adapter.filename ? adapter.filename(item, stream) : undefined;
+          download(plan, { streamToDisk: !!adapter.streamToDisk, suggestedName: name });
         },
       });
       anchor.appendChild(btn);
@@ -89,6 +92,14 @@ export function start(adapter) {
   }
   observeDom();
 
+  // 平台数据需要现取（清晰度列表不在 DOM/网络响应里）时由 adapter 自己拉，kernel 只负责定时触发
+  function refreshSources() {
+    if (!adapter.refresh) return;
+    Promise.resolve()
+      .then(() => adapter.refresh(store))
+      .catch(() => {});
+  }
+
   setInterval(renderAll, 1500);
   setInterval(() => {
     scanSSR(adapter, store);
@@ -99,8 +110,10 @@ export function start(adapter) {
       fallbackUrl = url;
       renderAll();
     }
+    refreshSources();
   }, 2000);
   setTimeout(() => scanSSR(adapter, store), 500);
+  setTimeout(refreshSources, 500);
   scheduleRender();
 
   return {

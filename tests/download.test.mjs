@@ -80,6 +80,70 @@ test("下载：非 2xx 提示 HTTP 状态码", async () => {
   }
 });
 
+test("下载：plan 可以是 Promise，流式写盘不建 blob", async () => {
+  const dom = stubDom();
+  const toasts = [];
+  const written = [];
+  const prevPicker = globalThis.showSaveFilePicker;
+  globalThis.showSaveFilePicker = async () => ({
+    createWritable: async () => ({
+      write: async (chunk) => {
+        for (const b of chunk) written.push(b);
+      },
+      close: async () => {},
+      abort: async () => {},
+    }),
+  });
+  const nativeFetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-length": "4", "content-type": "video/mp4" }),
+    body: bodyOf([[1, 2], [3, 4]]),
+  });
+  try {
+    const download = createDownloader({ nativeFetch, toast: (m) => toasts.push(m) });
+    const ok = await download(Promise.resolve({ url: "https://cdn/v", filename: "x.mp4" }), {
+      streamToDisk: true,
+      suggestedName: "作者_标题_1080P.mp4",
+    });
+    assert.equal(ok, true);
+    assert.deepEqual(written, [1, 2, 3, 4]);
+    assert.equal(dom.clicked.length, 0);
+    assert.equal(toasts.at(-1), "✓ 下载完成");
+  } finally {
+    if (prevPicker === undefined) delete globalThis.showSaveFilePicker;
+    else globalThis.showSaveFilePicker = prevPicker;
+    dom.restore();
+  }
+});
+
+test("下载：用户取消保存对话框不发起请求", async () => {
+  const dom = stubDom();
+  const toasts = [];
+  let fetched = 0;
+  const prevPicker = globalThis.showSaveFilePicker;
+  globalThis.showSaveFilePicker = async () => {
+    const e = new Error("cancelled");
+    e.name = "AbortError";
+    throw e;
+  };
+  const nativeFetch = async () => {
+    fetched++;
+    return { ok: true, status: 200, headers: new Headers(), body: bodyOf([]) };
+  };
+  try {
+    const download = createDownloader({ nativeFetch, toast: (m) => toasts.push(m) });
+    const ok = await download(Promise.resolve({ url: "u", filename: "x.mp4" }), { streamToDisk: true });
+    assert.equal(ok, false);
+    assert.equal(fetched, 0);
+    assert.equal(toasts.at(-1), "已取消下载");
+  } finally {
+    if (prevPicker === undefined) delete globalThis.showSaveFilePicker;
+    else globalThis.showSaveFilePicker = prevPicker;
+    dom.restore();
+  }
+});
+
 test("下载：网络异常落入失败提示", async () => {
   const dom = stubDom();
   const toasts = [];

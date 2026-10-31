@@ -47,6 +47,7 @@ export function installNetworkHooks(adapter, store) {
 }
 
 export function scanSSR(adapter, store) {
+  if (!adapter.ssrSelector) return;
   const el = document.querySelector(adapter.ssrSelector);
   if (!el) return;
   let data = null;
@@ -63,6 +64,7 @@ export function scanSSR(adapter, store) {
 }
 
 export function scanPerformance(adapter) {
+  if (!adapter.perfPattern) return null;
   const urls = performance
     .getEntriesByType("resource")
     .map((e) => e.name)

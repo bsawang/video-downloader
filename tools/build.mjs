@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { douyinAdapter } from "../src/platforms/douyin/adapter.js";
+import { bilibiliAdapter } from "../src/platforms/bilibili/adapter.js";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -21,6 +22,8 @@ const ORDER = [
   "kernel/core.js",
   "platforms/douyin/rules.js",
   "platforms/douyin/adapter.js",
+  "platforms/bilibili/rules.js",
+  "platforms/bilibili/adapter.js",
   "entry/tm.js",
 ];
 
@@ -56,13 +59,14 @@ export function build() {
     chunks.push(`// ---- ${rel} ----\n${code.trim()}`);
   }
 
-  const matchLines = douyinAdapter.matches.map((m) => `// @match        ${m}`).join("\n");
+  const matches = [...new Set([...douyinAdapter.matches, ...bilibiliAdapter.matches])];
+  const matchLines = matches.map((m) => `// @match        ${m}`).join("\n");
   const header = [
     "// ==UserScript==",
     "// @name         短视频下载器",
     "// @namespace    https://github.com/bsawang/video-downloader",
     `// @version      ${pkg.version}`,
-    "// @description  页面附着的短视频无水印下载（无后端）",
+    "// @description  页面附着的视频下载（抖音/B站，无后端）",
     `// @updateURL    ${UPDATE_URL}`,
     `// @downloadURL  ${UPDATE_URL}`,
     matchLines,

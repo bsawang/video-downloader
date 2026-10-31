@@ -1,8 +1,8 @@
 # 短视频下载器
 
-抖音视频**无水印下载**浏览器插件（无后端，页面内直接下载）。
+抖音、B站视频**无水印下载**浏览器插件（无后端，页面内直接下载）。
 
-覆盖首页 / 频道栏目 / 搜索结果（多列 + 单列大视频流）/ 视频详情页 / **个人主页（作品/喜欢/收藏三 tab）**，全站统一"视频上 hover 出下载按钮 → 弹清晰度菜单 → 下载"。
+覆盖抖音首页 / 频道栏目 / 搜索结果（多列 + 单列大视频流）/ 视频详情页 / **个人主页（作品/喜欢/收藏三 tab）**，以及 **B站视频详情页（含多分P）**，全站统一"视频上 hover 出下载按钮 → 弹清晰度菜单 → 下载"。
 
 ## 支持方式与平台
 
@@ -10,17 +10,17 @@
 
 | 方式 | 状态 |
 |---|---|
-| **extension**（浏览器插件） | ✅ 可用（当前版本） |
+| **extension**（浏览器插件） | ✅ 可用（TM 用户脚本为主） |
 | **web**（网页版，浏览器打开即用，无需装插件） | ⏳ 规划中 |
 
 **平台**（内容网站）：
 
-| 平台 | 状态 |
-|---|---|
-| **抖音** | ✅ 支持 |
-| 小红书 | ⏳ 规划 |
-| B站 | ⏳ 规划 |
-| YouTube | ⏳ 规划 |
+| 平台 | 状态 | 范围 |
+|---|---|---|
+| **抖音** | ✅ 支持 | 首页 / 搜索 / 详情 / 个人主页 / 作者作品列表 |
+| **B站** | ✅ 支持 | 视频详情页（`/video/BV...`，含多分P） |
+| 小红书 | ⏳ 规划 | — |
+| YouTube | ⏳ 规划 | — |
 
 **环境要求**（extension 版）：
 
@@ -28,7 +28,7 @@
 |---|---|
 | 浏览器 | Chrome / Edge（Chromium 内核）**111+**；Firefox / Safari 未适配 |
 | 系统 | Windows / macOS / Linux（跨平台） |
-| 登录 | 建议已登录抖音（未登录部分页面无数据可下载） |
+| 登录 | 建议已登录抖音；B站清晰度上限跟随账号（未登录常见 720P，登录/VIP 更高） |
 
 ## 下载安装
 
@@ -52,13 +52,13 @@ git clone https://github.com/bsawang/video-downloader.git
 
 ## Tampermonkey 版（阶段 0，重构中）
 
-单文件 Tampermonkey 用户脚本（`@grant none`），行为与 extension 0.5.3 等价，现已覆盖详情弹层「作者作品」列表。
+单文件 Tampermonkey 用户脚本（`@grant none`），行为与 extension 0.5.3 等价，现已覆盖抖音全站与 B站详情页。
 
 安装（推荐，装完自动更新）：
 
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/)，Chrome 138+ 需在扩展页开启**允许用户脚本**
 2. 浏览器打开 [releases/latest/download/douyin.user.js](https://github.com/bsawang/video-downloader/releases/latest/download/douyin.user.js) → TM 弹出安装页 → 安装
-3. 打开抖音，交互与 extension 版一致
+3. 打开抖音或 B站视频页，交互一致
 
 脚本头带 `@updateURL`/`@downloadURL`（同指上面的固定链接），TM 会在后台按设置周期检查更新；也可在 TM 面板点「检查用户脚本更新」立即拉取。**通过本地文件安装或拖入安装的脚本没有更新源，需要改从上面的链接安装一次。**
 
@@ -71,16 +71,22 @@ npm test          # node --test，含 legacy oracle 等价用例
 
 发版（让使用者的 TM 自动更新到新版本）：`npm run build` 后新建 release，把 `dist/douyin.user.js` 作为**同名资产**上传——脚本头的 URL 是 `releases/latest/download/douyin.user.js` 固定别名，不需要改动。
 
-> 平台差异集中在 `src/platforms/douyin/`，通用能力在 `src/kernel/`；设计见 [docs/spec.md](./docs/spec.md)。
+> 平台差异集中在 `src/platforms/<平台>/`（当前抖音、B站），通用能力在 `src/kernel/`；设计见 [docs/spec.md](./docs/spec.md)。
 
 ## 使用
 
 | 操作 | 说明 |
 |---|---|
 | 鼠标移到视频卡片 / 播放器 | 出现 **⬇** 图标（列表）或 **⬇ 下载**（播放器） |
-| 点击图标 | 弹出清晰度菜单（1440p / 1080p / 720p / 540p） |
+| 点击图标 | 弹出清晰度菜单（档位来自平台，按清晰度降序） |
 | 选择清晰度 | 无水印下载，文件名 `作者_标题_清晰度.mp4` |
 | 底部 toast | 显示下载进度 / 完成 / 失败 |
+
+### B站说明
+
+- **档位跟随账号**：菜单里是当前账号在该视频上真实可下载的档位（未登录常见 720P 上限，登录/VIP 更高）；DASH 专属档位与分段视频暂不支持。
+- **多分P**：切换分P后按钮菜单会自动跟随，文件名带 `P<n> <分P名>`。
+- **长视频保存**：点选清晰度后会先弹浏览器**保存对话框**（File System Access），文件边下边写盘；取消对话框即取消下载。不支持该 API 的浏览器会回落到内存下载，超长视频可能失败。
 
 详细说明见 [extension/README.md](extension/README.md)。
 

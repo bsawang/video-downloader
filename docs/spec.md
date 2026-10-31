@@ -1,4 +1,4 @@
-# 短视频下载器 规约 (v0.6.0-decouple)
+# 短视频下载器 规约 (v0.8.0)
 
 > 业务层 → [prd.md](./prd.md)（本文件 Mx 模块与 prd 一一对应）
 
@@ -20,15 +20,18 @@
 
 ```ts
 VideoItem = {
-  videoId: string,            // 平台无关的唯一 id（抖音为 aweme_id 的字符串形式）
+  videoId: string,            // 平台无关的唯一 id（抖音为 aweme_id，B站为当前分P的 cid）
   title: string,
   author: string,
   streams: Stream[],          // 按清晰度降序，至少 1 条
   pageKind?: 'card' | 'detail',
-  fallback?: boolean          // perf 兜底构造的条目（不进 store，仅本次渲染）
+  fallback?: boolean,         // perf 兜底构造的条目（不进 store，仅本次渲染）
+  [extra: string]: unknown    // 平台附加字段（如 B站 bvid/cid/page/pageCount/part），kernel 不读
 }
-Stream = { label: string, url: string }      // label 如 "1080p"，url 为带签名的直链
-DownloadPlan = { url: string, credentials: 'omit' | 'include', headers?: Record<string,string>, filename: string }
+Stream = { label: string, url?: string, qn?: number }
+// label 如 "1080p" / "1080P"；url 为带签名的直链，能预取到时才填；
+// B站长视频直链会过期，只记平台档位码 qn，点下载时由 adapter.resolveDownload 现取
+DownloadPlan = { url: string, credentials: 'omit' | 'include', headers?: Record<string,string>, filename?: string }
 ```
 
 ### 2.2 平台适配契约
@@ -39,9 +42,14 @@ PlatformAdapter = {
   matches: string[],                       // content-script 匹配模式
   sources: Source[],                       // 采集源，见 M1.2
   domSources?: DomSource[],                // DOM 采集源（接口数据被归一到组件树后的兜底），见 M1.2
+  ssrSelector: string | null,              // 无 SSR 采集源时为 null
+  perfPattern: RegExp | null,              // 无性能兜底源时为 null
+  refresh?: (store: Store) => Promise<void>, // 平台数据需现取时由 adapter 自己拉，见 M1.2
   parse(raw: object): VideoItem | null,    // 平台原始条目 → 中性条目
   normalizeStreams(raw: object): Stream[], // 平台清晰度 → 中性流
-  resolveDownload(item: VideoItem, stream: Stream): DownloadPlan,
+  resolveDownload(item: VideoItem, stream: Stream): DownloadPlan | Promise<DownloadPlan>, // 允许异步现取直链
+  filename?(item: VideoItem, stream: Stream): string, // 平台自定义文件名（B站含分P），缺省用 kernel 规则
+  streamToDisk?: boolean,                  // 长视频落盘：true 时走 File System Access，见 M2.2
   anchors: AnchorRule[]                    // 见 M3.1
 }
 Source = { id: string, priority: number, reachableInPage: boolean,
@@ -76,12 +84,14 @@ src/kernel/store.js        候选仓库：upsert / merge / get
 src/kernel/hook.js         多源采集调度（fetch/XHR/SSR/DOM/perf）
 src/kernel/mount.js        规则驱动扫描 + 挂载
 src/kernel/ui.js           hover / popover / toast
-src/kernel/download.js     DownloadPlan → blob transport
+src/kernel/download.js     DownloadPlan → blob transport / File System Access 落盘
 src/kernel/core.js         组装 kernel，暴露 start(adapter)
 src/platforms/douyin/rules.js    抖音全部常量与规则
 src/platforms/douyin/adapter.js  parse / normalizeStreams / resolveDownload
-src/entry/tm.js            TM 头 + 调 start(douyinAdapter)
-tools/build.mjs            ESM 拼接为单文件 user.js
+src/platforms/bilibili/rules.js     B站全部常量、页面状态读取、锚点规则
+src/platforms/bilibili/adapter.js   清晰度现取 / 直链解析 / 文件名 / refresh
+src/entry/tm.js            按 URL 选 adapter 并调 start(adapter)
+tools/build.mjs            ESM 拼接为单文件 user.js（合并各 adapter 的 @match）
 tools/probe.mjs            CDP 四指标（阶段 0 仅骨架）
 tests/*.test.mjs           node --test
 tests/fixtures/*           样本与 legacy oracle
@@ -101,7 +111,7 @@ extension/                 冻结，仅回归沙箱
 
 ### 3.5 约定
 - ESM：每个模块只做命名导出，构建器剥离 `import`/`export` 后按固定拓扑序拼接。
-- 命名：kernel 内函数不与平台词汇混用；平台词汇只允许出现在 `src/platforms/**`。
+- 命名：kernel 内函数不与平台词汇混用；平台词汇只允许出现在 `src/platforms/**`。因构建产物是单一作用域，各平台模块的顶层函数名必须全局唯一（B站侧统一 `bili` 前缀）。
 - 日志：kernel 用 `log(level, ...)` 包装 `console`，默认 `warn` 以上输出；调试开关 `globalThis.__DL_DEBUG`。
 - 测试组织：`tests/<module>.test.mjs`，fixture 放 `tests/fixtures/`。
 
@@ -115,6 +125,8 @@ extension/                 冻结，仅回归沙箱
 | 声明式锚点规则 | 规则是平台数据，扫描器可复用 | 通用 DOM 匹配器（平台差异无法稳定覆盖） |
 | 验证通道：CDP（Node 内置 WebSocket，`tools/probe.mjs`） | 与用户实际调试方式一致，可复用已登录的本机 Chrome；注入 + 读 `__dlStats` 同一通道完成 | Playwright（另起 profile → 登录态失效、与用户 9222 端口冲突、匿名 headless 被判验证码；`spikes/verify_tm.py`、`spikes/verify_dom.py` 为历史脚本，默认不再使用） |
 | 更新源：Releases 固定别名 `releases/latest/download/douyin.user.js` | 换版本只重发同名资产，脚本头的 URL 恒定；`dist/` 继续忽略，产物不进 git 历史 | `raw.githubusercontent.com` 直链（须把构建产物提交入库，与 `dist/` 忽略规则冲突，且每次发版产生二进制 diff）；`gh-pages` 分支（多一条发布链路，收益低） |
+| B站清晰度用旧版 `playurl`（`fnval=1` → 单文件 `durl`） | 无 muxing 依赖，浏览器内可直接下载；`accept_quality/accept_description` 只列当前账号在该视频上真实可取的档位 | DASH（`fnval=4048`）：音视频分离，脚本内无法合并；`__playinfo__` 首屏 SSR：切 P 后不更新，且档位受登录态限制不如接口真实 |
+| B站长视频落盘走 File System Access（`showSaveFilePicker` + `createWritable`） | 3GB+ 单文件流式写盘，不整份驻留内存；picker 在点击的同步激活里弹出 | `GM_download`（需改 `@grant`/双世界，与 `@grant none` 单世界选型冲突，且 TM 下载器另起请求拿不到登录态）；继续用 blob（4 小时视频实测 3,482,563,020 B，内存扛不住） |
 
 ## 4. 功能需求
 
@@ -134,6 +146,8 @@ extension/                 冻结，仅回归沙箱
 | M5.1 | M5 | probe 四指标 | 🟢 |
 | M6.1 | M6 | 构建与组装 | 🟢 |
 | M6.2 | M6 | 行为基准 | 🟢 |
+| M7.1 | M7 | B站详情页识别与清晰度 | 🟢 |
+| M7.2 | M7 | 多分P切换与长视频落盘 | 🟢 |
 
 ### 需求树（依赖图）
 
@@ -167,6 +181,17 @@ flowchart TD
     M4.2 --> M6.1
     M5.1 --> M6.1
     M6.2 --> M6.1
+    M1 --> M7
+    M2 --> M7
+    M3 --> M7
+    M4 --> M7
+    M6 --> M7
+    M1.2 --> M7.1
+    M2.1 --> M7.1
+    M3.1 --> M7.1
+    M1.2 --> M7.2
+    M2.2 --> M7.2
+    M7.1 --> M7.2
 ```
 
 ### M1 视频识别与数据采集 🟢
@@ -194,10 +219,10 @@ flowchart TD
 - **依赖**：M1.1
 
 详细设计：
-- 数据流：`start()` 安装 fetch/XHR hook → 响应 `text()` → 对每个 `adapter.sources` 中 `match(url)` 为真的源调用 `extract(text)` → `adapter.parse` → `store.upsert`；每 2000ms 另跑 `adapter.domSources` 扫 DOM
-- 接口：`installNetworkHooks(adapter, store): typeof fetch`（返回原生 fetch 供下载复用）；`scanSSR(adapter, store)`；`scanDomSources(adapter, store)`；`scanPerformance(adapter): string|null`；`debug(...args)`（受 `globalThis.__DL_DEBUG` 控制）；定时器 2000ms
+- 数据流：`start()` 安装 fetch/XHR hook → 响应 `text()` → 对每个 `adapter.sources` 中 `match(url)` 为真的源调用 `extract(text)` → `adapter.parse` → `store.upsert`；每 2000ms 另跑 `adapter.domSources` 扫 DOM，并调用一次 `adapter.refresh(store)`（若平台提供）
+- 接口：`installNetworkHooks(adapter, store): typeof fetch`（返回原生 fetch 供下载复用）；`scanSSR(adapter, store)`；`scanDomSources(adapter, store)`；`scanPerformance(adapter): string|null`；`refreshSources()`（内部，启动后 500ms 与每 2000ms 各触发一次）；`debug(...args)`（受 `globalThis.__DL_DEBUG` 控制）；定时器 2000ms
 - 数据结构：`Source` / `DomSource` 见 §2.2
-- 算法与规则：fetch 用 `resp.clone().text()`，不阻塞原请求；XHR 用 `load` 事件读 `responseText`；SSR 解析失败时尝试 `decodeURIComponent`；DOM 源只在 `streams` 与仓库内已有条目不一致时写入，避免空转触发重渲染；perf 只取最后一个匹配 URL
+- 算法与规则：fetch 用 `resp.clone().text()`，不阻塞原请求；XHR 用 `load` 事件读 `responseText`；SSR 解析失败时尝试 `decodeURIComponent`；DOM 源只在 `streams` 与仓库内已有条目不一致时写入，避免空转触发重渲染；perf 只取最后一个匹配 URL；`refresh` 的节流/去重责任在 adapter（kernel 只负责定时触发并吞掉异常）
 - 错误与边界：任何解析异常吞掉并 `log('warn')`；跨域响应读取失败跳过；`resp.body` 为空跳过；单个 DOM 源抛错不影响后续源
 - 测试要点：M6.2 基准 1 + 浏览器冒烟
 
@@ -234,16 +259,17 @@ flowchart TD
 - 测试要点：M6.2 基准 1
 
 #### M2.2 下载计划与执行 🟢
-- **验收**：点“1080p”后产生 `作者_标题_1080p.mp4` 文件；progress 回调至少触发一次；失败时 toast 含 HTTP 状态码
+- **验收**：点“1080p”后产生 `作者_标题_1080p.mp4` 文件；progress 回调至少触发一次；失败时 toast 含 HTTP 状态码；`streamToDisk` 平台点选后先弹保存对话框，字节数落盘等于服务端 `content-length`，blob 不进内存
 - **依赖**：M2.1
 
 详细设计：
-- 数据流：UI 选档 → `adapter.resolveDownload(item, stream)` → `download(plan, onProgress)` → `fetch(credentials)` → 流式读 → `Blob` → `<a download>` → 撤销 blob URL
-- 接口：`download(plan, {onProgress, onDone}): Promise<void>`
-- 数据结构：`DownloadPlan` 见 §2.1
-- 算法与规则：`credentials` 由平台给（抖音 `omit`）；文件名 `sanitize(author + '_' + title + '_' + label) + '.mp4'`；每读一块上报 `received/total`
-- 错误与边界：非 2xx 回报 `HTTP <status>`；`content-length` 缺失时进度显示 `…`；异常回报字符串错误；blob URL 10s 后释放
-- 测试要点：浏览器冒烟（下载落盘）
+- 数据流（blob 路径）：UI 选档 → 把 `adapter.resolveDownload(item, stream)` 包成 Promise → `download(planPromise, opts)` → `fetch(credentials)` → 流式读 → `Blob` → `<a download>` → 撤销 blob URL
+- 数据流（落盘路径，`opts.streamToDisk` 且 `showSaveFilePicker` 可用）：同一入口先同步调 `showSaveFilePicker({suggestedName})`（保住用户点击的激活态）→ `createWritable()` → 再 `await` 计划 Promise → `fetch` → 每块 `writable.write(value)` → `close()`
+- 接口：`download(planOrPromise, { streamToDisk?, suggestedName? }): Promise<boolean>`；`createDownloader({nativeFetch, toast})`
+- 数据结构：`DownloadPlan` 见 §2.1；`plan.filename` 可缺省（落盘路径用 `suggestedName`）
+- 算法与规则：`credentials` 由平台给（抖音 `omit`，B站直链 `omit`）；文件名 `sanitize(author + '_' + title + '_' + label) + '.mp4'`，平台可提供 `adapter.filename` 覆盖（B站含分P）；每读一块上报 `received/total`；Picker 的 `AbortError` 视为用户取消，不发请求
+- 错误与边界：非 2xx 回报 `HTTP <status>`（落盘路径先 `writable.abort()`）；`content-length` 缺失时进度显示 `…`；异常回报字符串错误并中止可写流；blob URL 10s 后释放；无 `showSaveFilePicker` 时静默回落 blob 路径
+- 测试要点：`tests/download.test.mjs`（blob 路径、Promise 计划、落盘路径字节一致、取消不请求） + 浏览器冒烟（下载落盘）
 
 ### M3 页面附着交互 🟢
 模块概要：
@@ -350,16 +376,16 @@ flowchart TD
 - 被谁依赖：无
 
 #### M6.1 构建与组装 🟢
-- **验收**：`node tools/build.mjs` 产出 `dist/douyin.user.js`；`node --check` 通过；文件头含 `@name/@version/@match/@run-at/@grant none` 与 `@updateURL/@downloadURL`（同指 Releases 固定别名）；版本号只来自 `package.json`
-- **依赖**：M1.2、M3.2、M4.2、M5.1
+- **验收**：`node tools/build.mjs` 产出 `dist/douyin.user.js`（资产名保持不变，已安装用户的更新别名不断）；`node --check` 通过；文件头含 `@name/@version/@match/@run-at/@grant none` 与 `@updateURL/@downloadURL`（同指 Releases 固定别名），`@match` 覆盖全部已接入平台；版本号只来自 `package.json`
+- **依赖**：M1.2、M3.2、M4.2、M5.1、M7.1
 
 详细设计：
 - 数据流：按拓扑序读文件 → 剥离 `import`/`export` 行 → 包进 IIFE → 拼接 TM 头 → 写 `dist/`
-- 接口：`build(): Promise<string>`；`src/entry/tm.js` 导出 `start(adapter)`
-- 数据结构：TM 头字段：`@name`、`@namespace`、`@version`、`@description`、`@updateURL`、`@downloadURL`（后两者同指 `build.mjs` 的 `UPDATE_URL` 常量）、`@match`（由 `adapter.matches` 生成）、`@run-at document-start`、`@grant none`
-- 算法与规则：文件顺序固定为 `extract, store, hook, mount, ui, download, core, rules, adapter, entry`；重复的 `const` 名视为构建失败（简单作用域检查）
-- 错误与边界：缺文件 / 顺序错 → 构建失败并打印缺失项；`export` 残留 → 失败
-- 测试要点：构建命令 + `node --check`
+- 接口：`build(): Promise<string>`；`src/entry/tm.js` 按 `adapter.matches` 逐条匹配 `location.href`，命中则 `start(adapter)`
+- 数据结构：TM 头字段：`@name`、`@namespace`、`@version`、`@description`、`@updateURL`、`@downloadURL`（后两者同指 `build.mjs` 的 `UPDATE_URL` 常量）、`@match`（各 adapter `matches` 并集去重）、`@run-at document-start`、`@grant none`
+- 算法与规则：文件顺序固定为 `extract, store, hook, mount, ui, download, core, douyin/rules, douyin/adapter, bilibili/rules, bilibili/adapter, entry`；重复的顶层声明视为构建失败（单作用域拼接）；`*` 通配按正则转义匹配
+- 错误与边界：缺文件 / 顺序错 → 构建失败并打印缺失项；`export` 残留 → 失败；新平台顶层名与现有冲突 → 构建报重复声明
+- 测试要点：构建命令 + `node --check` + 真页注入产物
 
 #### M6.2 行为基准 🟢
 - **验收**：`node --test tests/*.test.mjs` 全绿；基准 1（legacy oracle 对比）覆盖 3 份 fixture；基准 2（UI 快照）对照 `spikes/out/run_20260801_163730_plugin/result.json` 的标题/作者/清晰度集合
@@ -373,9 +399,43 @@ flowchart TD
 - 错误与边界：旧实现只能作为 oracle，不许在新代码中 import；快照页面若已失效，记录为 skip 并在报告中注明
 - 测试要点：自身即测试
 
+### M7 平台接入（B站详情页）🟢
+模块概要：
+- 职责：B站详情页的视频识别、清晰度获取、直链解析、下载命名，全部差异留在本模块
+- 输入：`__INITIAL_STATE__` / `playurl` 接口 / `#bilibili-player`
+- 输出：`bilibiliAdapter`（`PlatformAdapter`）
+- 依赖：M1、M2、M3（契约）
+- 被谁依赖：M6
+
+#### M7.1 B站详情页识别与清晰度 🟢
+- **验收**：打开 `https://www.bilibili.com/video/BV...` 后播放器右下出现 **⬇ 下载**；点开列出的档位与 `accept_description` 一致且按清晰度降序；档位上限随当前账号/视频真实能力变化（未登录可能只有 720P，登录/VIP 提高），不做写死；接口失败时无按钮且无 pageerror
+- **依赖**：M1.2、M2.1、M3.1
+
+详细设计：
+- 数据流：entry 按 `matches` 选中 `bilibiliAdapter` → `start()` → 500ms / 每 2000ms `refresh` → `readBiliPage()` 读 `__INITIAL_STATE__` 的 `bvid/cid/p` → `GET api.bilibili.com/x/player/playurl?bvid&cid&fnver=0&fourk=1&fnval=1&qn=127`（`credentials: include`）→ `buildBiliStreams(accept_quality, accept_description)` → `store.upsert` → `renderAll` 用 `#bilibili-player` 规则（`idFrom = readBiliPage().cid`）→ 按 `mount` 回退挂按钮
+- 接口：`readBiliPage(loc?): {bvid,cid,page,title,author,part,pageCount}|null`；`biliPlayurlUrl(meta, qn): string`；`buildBiliStreams(data): Stream[]`；`biliParse(raw)`；`biliNormalizeStreams(raw)`；`biliResolveDownload(item, stream): Promise<DownloadPlan>`；`biliRefresh(store): Promise<void>`
+- 数据结构：`Stream { label, qn }` 不预存 url；`VideoItem` 附加 `bvid/cid/page/pageCount/part`（kernel 不读）
+- 算法与规则：当前分P取顶层 `__INITIAL_STATE__.p`/`.cid`（`videoData.cid` 恒为第 1P，不用）；缺 `p` 时回退 URL `?p=`，再回退第 1P；label 取 `accept_description[i]`，缺省 `${qn}P`，排序复用 `sortStreams` 的数字降序；`qn=127` 只为拿全量档位表，不代表实际可下载档；点选后按 `stream.qn` 重新请求同一接口取 `durl[0].url`
+- 错误与边界：非 `/video/` 页无播放器 → 不挂；`__INITIAL_STATE__` 缺失或无 `videoData` → `readBiliPage` 返回 null（不发请求）；接口 `code !== 0` 或 `accept_quality` 为空 → 不写 store；`durl.length > 1` → toast「分段视频暂不支持（共 N 段）」；直链约 2 小时过期 → 点下载时现取
+- 测试要点：`tests/bilibili.test.mjs`（页面状态读取、URL、档位排序、playurl 解析、直链解析、refresh 每 cid 一次、契约）；真页 CDP：短链视频弹层 `[1080P, 720P, 360P]`，选取后 CDN Range 请求 `206 video/mp4`
+
+#### M7.2 多分P切换与长视频落盘 🟢
+- **验收**：多分P视频切 P 后 2s 内按钮菜单跟随当前 P（标题/分P名/档位按新 cid 刷新）；下载文件名含 `P<n> <分P名>`；长视频点选后弹出保存对话框，落盘字节数等于服务端 `content-length`，且不构造整份 Blob
+- **依赖**：M1.2、M2.2、M7.1
+
+详细设计：
+- 数据流：SPA 切 P → `__INITIAL_STATE__.cid/p` 变化 → 下一轮 `refresh`（≤2s）发现新 cid 不在 store → 请求 playurl → upsert → `renderAll` 以新 cid 命中锚点 → 按钮随播放器挂载；点选 → `biliFilename` 生成含分P名 → `download(planPromise, { streamToDisk: true, suggestedName })` → 保存对话框 → 逐块写盘
+- 接口：`biliFilename(item, stream): string`；`download(planOrPromise, { streamToDisk?, suggestedName? }): Promise<boolean>`
+- 数据结构：store 按 cid 存条目；切回已访问过的 P 时 `store.get(cid)` 命中，跳过请求
+- 算法与规则：锚点 `idFrom` 用函数形式（DOM 无 id 信号）；`renderedIds` 记录 `{videoId, btn}` 并以 `btn.isConnected` 判断是否需补挂（SPA 重渲染会清掉外来节点）；`refresh` 每个 cid 成功一次，`biliFetching` 互斥，同 cid 失败后 5s 内不重试（避免 2s 定时器打爆接口）；文件名 `author_title_P{n} {part}_{label}.mp4`，`sanitizeName` 后 120 字符截断；落盘路径先同步弹出 picker 保住点击激活态，再等待直链 Promise
+- 错误与边界：切 P 瞬间状态短暂为空 → 下一轮重试；URL `p` 越界回退第 1P；重复 upsert 由 store 按 cid 去重；picker 取消（`AbortError`）→ toast「已取消下载」且不发请求；浏览器不支持 `showSaveFilePicker` → 静默回落 blob 路径（超长视频有内存风险，README 注明）
+- 测试要点：`tests/bilibili.test.mjs`（当前 P 定位、多分P文件名、refresh 每 cid 一次）；`tests/download.test.mjs`（Promise 计划、落盘字节、取消不请求）；真页 CDP：P3 → P1 菜单/文件名跟随，落盘 2,350,008 B 与服务端一致
+
 ## 5. 不在范围内
 
-- 新平台接入、GM_download、流式落盘、远程适配下发、独立 UI、常驻后台、MV3 新版本、Web/后端版、签名破解与反爬对抗。
+- 新平台接入范围：本轮只做 **B站详情页**（`/video/BV...`）；B站搜索页、个人主页、番剧、直播、互动视频不接；小红书 / YouTube 仍为规划。
+- B站 DASH 音视频分离流、分段视频（`durl.length > 1`）、登录/大会员能力绕过不在范围内。
+- 不做 `GM_download`、远程适配下发、独立 UI、常驻后台、MV3 新版本、Web/后端版、签名破解与反爬对抗。
 - `extension/` 仅作回归沙箱，不再发版。
 
 ## 6. 待定项
@@ -385,6 +445,7 @@ flowchart TD
 | 2 | 是否在阶段 1 切 `GM_download`（需双脚本或 `@inject-into page` 实测） | bsawang | 接入第二个平台前 | 影响 M2.2 transport，不影响阶段 0 |
 
 > 原 #1（`@updateURL` / `@downloadURL` 托管地址）已于 2026-10-29 定案：Releases 固定别名，见 §3.6 选型记录。
+> 原 #2 已于 2026-10-31 定案：不切 `GM_download`。长视频落盘走 File System Access（M2.2 / M7.2），抖音继续 blob；`@grant none` 单世界不变。
 
 ## 7. 功能实现调整日志（快道）
 
@@ -405,3 +466,5 @@ flowchart TD
 | 2026-10-29 | 新增子需求 | 新增 M3.3「详情弹层作者作品列表锚点」；M3.1 规则数 5 → 6；`AnchorRule.idFrom` 支持函数形式；`rendered` 由 `WeakSet` 改为记录 videoId 的 `WeakMap` | 真页实测 `[data-e2e="author-card-list"] li` 无任何 DOM id 信号（`a` 无 href、`li` 无 data 属性），只能读 React fiber 的 `awemeInfo.awemeId`；列表可能复用节点，需按 id 变化重挂 |
 | 2026-10-29 | 改详细设计 | M3.3 增补 DOM 数据源：`PlatformAdapter.domSources` + kernel `scanDomSources`；新增 `douyin-fiber` 源（`readAwemeInfo` / `fiberToRaw`）；M1.2 接口与 §2.2 契约同步 | 有锚点仍无按钮：该列表条目在网络响应里拿不到（fiber 的 `awemeInfo` 是 camelCase 归一化数据，与接口 snake_case 不同构，且列表在频道流里由组件树渲染）；只读 id 不足以出档位，必须同时从 fiber 取 `bitRateList` 并折回 `parse` 管线 |
 | 2026-10-29 | 改验收 | M6.1 验收与头字段增加 `@updateURL`/`@downloadURL`；关闭待定项 #1（定为 Releases 固定别名）；`package.json` 0.6.0 → 0.7.0 | 用户要求 TM 自动更新：无这两个字段 TM 无从检查更新；发版时在 release 挂同名 `douyin.user.js` 资产，`latest/download` 别名保持恒定 |
+| 2026-10-31 | 新增模块 | 新增 M7「平台接入（B站详情页）」及 M7.1/M7.2；prd 同步新增 M7 与非目标调整 | 用户要求用 CDP 调研开发 B 站播放页下载（先详情页），验证“新增平台 = 新增适配” |
+| 2026-10-31 | 改详细设计 | §2.1 `Stream.url` 改可选、加 `qn`，`DownloadPlan.filename` 改可选；§2.2 adapter 加 `refresh?`/`filename?`/`streamToDisk?`，`resolveDownload` 允许返回 Promise，补 `ssrSelector`/`perfPattern`；M1.2 增加 `refresh` 定时触发；M2.2 增加 File System Access 落盘路径；M6.1 改为多 adapter 拼接、`@match` 并集；关闭待定项 #2（不切 `GM_download`） | B站清晰度与直链都不在 DOM/网络响应/首屏 SSR 里，需 adapter 现取；长视频单文件可达 3GB+，blob 整份驻留内存不可用；同一脚本需同时承载两个平台 |
