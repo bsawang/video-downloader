@@ -207,6 +207,39 @@ test("xhsRules 覆盖 www 全站：一条详情 + 一条卡片规则，详情按
   assert.equal(card.idFrom(fakeCard()), NOTE_ID);
 });
 
+test("xhsRules 详情锚点：弹层不写页面状态时按播放器节点认视频笔记", () => {
+  const detail = xhsRules.anchors.find((a) => a.kind === "detail");
+  const restore = withState(undefined);
+  const prevLoc = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: { pathname: `/explore/${NOTE_ID}`, search: "" },
+  });
+  try {
+    assert.equal(detail.idFrom({ querySelector: (sel) => (sel === "video" ? {} : null) }), NOTE_ID);
+    assert.equal(detail.idFrom({ querySelector: () => null }), null);
+    assert.equal(detail.idFrom(null), null);
+  } finally {
+    if (prevLoc) Object.defineProperty(globalThis, "location", prevLoc);
+    else delete globalThis.location;
+    restore();
+  }
+
+  const restore2 = withState({ note: { noteDetailMap: { [NOTE_ID]: { note } } } });
+  const prevLoc2 = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: { pathname: `/explore/${NOTE_ID}`, search: "" },
+  });
+  try {
+    assert.equal(detail.idFrom(null), NOTE_ID);
+  } finally {
+    if (prevLoc2) Object.defineProperty(globalThis, "location", prevLoc2);
+    else delete globalThis.location;
+    restore2();
+  }
+});
+
 test("xhsStub 卡片带标题/作者与令牌；无令牌且状态里没有笔记时不挂按钮", () => {
   const restore = withState(undefined);
   try {
