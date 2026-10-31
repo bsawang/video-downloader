@@ -55,6 +55,7 @@
   - Shorts 播放页 `/shorts/KTNDdzmWnkU`：`stats {candidates:1,anchors:1,mounted:1}`，按钮 **79×40 @ (1144,134)**（`#shorts-player` 829×767 @ (829,64) 右上 `top:70/right:12`）；悬停按钮中心命中 `button[data-dl-icon]`，层序 `button > video > #shorts-player > #container`；点开菜单 6 档；点 144p → InnerTube 200 + googlevideo 请求发出
   - 当前网络下字节流不可用（独立于产品代码的对照）：同源页面直接 `fetch` googlevideo 也拿不到正文 —— `/shorts` 页直链 302 到另一节点后响应缺 `Access-Control-Allow-Origin`（`Network.loadingFailed` = `MissingAllowOriginHeader`）→ toast「✗ 下载失败：TypeError: Failed to fetch」；`/watch` 页直链 `206 + content-length 705986` 但正文只回 1 B，新校验给出「✗ 下载失败：数据不完整（1/705986 字节）」并 abort 半成品。链路请求（档位/签名/Range）本身正确，等服务端/代理恢复后即可完整落盘
 - 构建：`npm run build` → `dist/douyin.user.js` **72 841 B**，`@version 0.13.0`，sha256 `31a4949c406fe445e975478d484a99a7518804787c9e5c7276df79faca6e9bee`
+- 发版：release v0.13.0 挂 `douyin.user.js` + `video-downloader-v0.5.3.crx/.zip`；固定别名 → `200`、72 841 B、`@version 0.13.0`，sha256 与本地全等
 
 ## v0.12.0 ✅ {spec §M9 · YouTube 平台接入}
 - 调研（CDP 运行态 + InnerTube 实测）：
