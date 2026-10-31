@@ -335,12 +335,13 @@ test("bilibiliAdapter 走单文件 + 落盘，且不带 SSR/perf 源", () => {
 // ---- 卡片页（首页/热门/排行/搜索）：只有 bvid，cid 与档位现查 ----
 
 function fakeCard(html) {
+  const anchors = html.anchors || (html.href ? [{ href: html.href }] : []);
   return {
     querySelector(sel) {
-      if (sel.includes("a[href")) {
-        return html.href ? { getAttribute: () => html.href } : null;
-      }
       return html[sel] ? { textContent: html[sel] } : null;
+    },
+    querySelectorAll() {
+      return anchors.map((a) => ({ getAttribute: (name) => (name in a ? a[name] : null) }));
     },
   };
 }
@@ -350,6 +351,20 @@ test("biliCardBvid 从卡片链接取 bvid（协议相对/带参数）", () => {
   assert.equal(biliCardBvid(fakeCard({ href: "https://www.bilibili.com/video/BV1JYsd6sE4k/" })), "BV1JYsd6sE4k");
   assert.equal(biliCardBvid(fakeCard({})), null);
   assert.equal(biliCardBvid(null), null);
+});
+
+test("biliCardBvid 兼容广告卡：真实目标在 data-target-url 上", () => {
+  const ad = fakeCard({
+    anchors: [
+      { href: "//cm.bilibili.com/cm/api/fees/pc/sync/v2?msg=a%7C5614" },
+      {
+        href: "//cm.bilibili.com/cm/api/fees/pc/sync/v2?msg=a%7C5614",
+        "data-target-url": "https://www.bilibili.com/video/BV15KWJzWEAo?source_id=5614",
+      },
+    ],
+  });
+  assert.equal(biliCardBvid(ad), "BV15KWJzWEAo");
+  assert.equal(biliCardBvid(fakeCard({ anchors: [{ "data-target-url": "https://mall.bilibili.com/x" }] })), null);
 });
 
 test("biliCardTitle 依次尝试首页/热门/排行标题选择器", () => {

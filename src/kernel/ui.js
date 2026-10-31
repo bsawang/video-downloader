@@ -18,12 +18,13 @@ export function createButton(item, { isDetail, onPick, onOpen, iconRight }) {
   btn.setAttribute("data-dl-icon", "1");
   btn.textContent = isDetail ? "⬇ 下载" : "⬇";
   btn.title = (item.title || "").slice(0, 30);
+  // text-indent:0：站点有 [title^=「] 之类的规则，会把带 title 的按钮按标题排缩进
   btn.style.cssText = isDetail
-    ? "position:absolute;right:16px;bottom:16px;z-index:99999;" +
+    ? "position:absolute;right:16px;bottom:16px;z-index:99999;text-indent:0;" +
       "background:rgba(47,107,255,.95);color:#fff;border:none;border-radius:10px;" +
       "padding:10px 18px;font-size:15px;font-weight:600;cursor:pointer;" +
       "box-shadow:0 3px 10px rgba(0,0,0,.4);"
-    : "position:absolute;top:8px;right:8px;z-index:99999;" +
+    : "position:absolute;top:8px;right:8px;z-index:99999;text-indent:0;" +
       "background:rgba(47,107,255,.92);color:#fff;border:none;border-radius:8px;" +
       "padding:5px 10px;font-size:13px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.35);";
   btn.style.display = "none";

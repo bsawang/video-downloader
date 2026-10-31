@@ -23,6 +23,24 @@
 | M7.3 | ✅ | 批次 3 |
 | M7.4 | ✅ | 批次 4 |
 
+## 快道 v0.10.1 ✅ {spec §7 · 对照 M7.4 卡片注入 / M3.2 按钮样式}
+- 缺陷（用户真页反馈，首页推荐流两张卡）：
+  - 「虽然被推到烂，但还是想夸一夸的邪修脱单群」无按钮：该卡是广告型推荐，`href` 是 `cm.bilibili.com/cm/api/fees/pc/sync/v2?msg=…` 埋点，真实目标 `https://www.bilibili.com/video/BV15KWJzWEAo?...` 只在锚点的 `data-target-url` 属性上；`biliCardBvid` 只查 `a[href*="/video/BV"]`，取不到 id 自然不挂
+  - 「【秋叶ComfyUI教程】…」按钮变形：站点 CSS 有 `[title^="「"], [title^="『"], [title^="【"] { text-indent:-.6em }`，我们的按钮带 `title`（视频标题）且以「【」开头被命中，shrink-to-fit 宽度从 33 缩到 25.2（`text-indent:-7.8px`，-0.6em × 13px）
+- 改动：
+  - `src/platforms/bilibili/rules.js`：`biliCardBvid` 遍历 `a[href], a[data-target-url]` 两个属性，命中首个 `/video/BV…`
+  - `src/kernel/ui.js`：详情与卡片两套按钮 `cssText` 加 `text-indent:0`，抵消站点按 `[title]` 设置的行内缩进
+  - `tests/bilibili.test.mjs`：`fakeCard` 改提供 `querySelectorAll`；新增广告卡 `data-target-url` 取 BV / 非 B站目标不取 两例
+  - 版本 0.10.0 → **0.10.1**；无 Mx.y 与验收判据变化（无 BV 目标的广告卡仍不注入）
+- 单测：`npm test` **56 pass / 0 fail**
+- 真页收点（用户 Chrome CDP，登录态，首页，注入等价构建；注入前给旧按钮打 `data-old` 区分）：
+  - 广告卡「邪修脱单群」：修复前 0 按钮 → 修复后 1 按钮 33×29.5、`text-indent:0px`；hover 正常揭示；点击出菜单 `[1080P 画面、1080P 音频、720P、360P]`（`BV15KWJzWEAo` 的 view + 两路 playurl 成功）
+  - 秋叶卡「BV1ecnb6oEnt」：旧实例按钮 25.2×29.5（`text-indent:-7.8px`），新构建按钮 33×29.5（`text-indent:0px`）；点击菜单 4 档、标题正常截断
+  - 覆盖：首页 36 张 `.bili-video-card` 中 22 张挂上新按钮，其余 14 张为无链接无文字的骨架占位（非视频），符合预期
+- 构建：`npm run build` → `dist/douyin.user.js` **40 266 B**，`@version 0.10.1`，sha256 `f54328e1…777`
+- 发版：`gh release create v0.10.1`（资产 `douyin.user.js` + `video-downloader-v0.5.3.crx` + `.zip`）；`releases/latest` → `v0.10.1`；固定别名拉取 `200`、40 266 B、`@version 0.10.1`，sha256 与本地 `dist/` 全等
+- 未覆盖：广告卡的非 B站目标（电商/外链）仍不注入；按钮仍会带原生 `title` 提示，站点后续若新增其它按 `[title]` 生效的规则需再核对
+
 ## v0.10.0 ✅ {spec §M7.4 · B站卡片页按钮注入}
 - 需求：确认下载链接不依赖播放页；首页 / 热门 / 排行 / 搜索 / 详情页推荐位可直接出按钮与档位（用户确认范围；多分P卡片默认只下 P1）
 - 调研（登录态真页 + 接口实证）：

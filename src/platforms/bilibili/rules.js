@@ -28,10 +28,16 @@ export function readBiliPage(loc = globalThis.location) {
 // 首页/搜索/排行/推荐位的卡片只暴露 bvid（cid 要现查），统一从卡片里的视频链接取。
 const CARD_BV = /\/video\/(BV[0-9A-Za-z]{10})/;
 
+// 广告卡片的 href 是 cm.bilibili.com 的跳转埋点，真实目标在 data-target-url 上
 export function biliCardBvid(el) {
-  const a = el && el.querySelector ? el.querySelector('a[href*="/video/BV"]') : null;
-  const m = a ? String(a.getAttribute("href") || "").match(CARD_BV) : null;
-  return m ? m[1] : null;
+  if (!el || !el.querySelector) return null;
+  for (const node of el.querySelectorAll("a[href], a[data-target-url]")) {
+    for (const attr of ["href", "data-target-url"]) {
+      const m = String(node.getAttribute(attr) || "").match(CARD_BV);
+      if (m) return m[1];
+    }
+  }
+  return null;
 }
 
 // 卡片标题只是占位（按钮 tooltip / 菜单标题），真实标题以 view 接口为准
