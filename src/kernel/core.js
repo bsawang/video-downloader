@@ -11,15 +11,28 @@ export function start(adapter) {
   let fallbackUrl = null;
   let lastPerfUrl = null;
   let renderTimer = null;
+  let renderQueued = false;
   let mountedCount = 0;
   let fallbackCount = 0;
 
   const nativeFetch = installNetworkHooks(adapter, store);
   const download = createDownloader({ nativeFetch, toast });
 
+  // 纯防抖会被页面连续重绘（弹层里播放器分几步插入、进度条持续更新）不断推迟，
+  // 按钮要等重绘停下来才出现；改成节流：首次变更后固定间隔渲染一次，期间的变更排下一轮
   function scheduleRender() {
-    clearTimeout(renderTimer);
-    renderTimer = setTimeout(renderAll, 300);
+    if (renderTimer) {
+      renderQueued = true;
+      return;
+    }
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      renderAll();
+      if (renderQueued) {
+        renderQueued = false;
+        scheduleRender();
+      }
+    }, 200);
   }
 
   function renderAll() {

@@ -165,13 +165,16 @@ export const xhsRules = {
     {
       selector: "#noteContainer",
       // 图文笔记没有播放器可下，等 noteDetailMap 就绪后只认 video 类型；
-      // 新版弹层从接口取数据、不写 __INITIAL_STATE__，此时按容器里是否已有播放器判断
+      // 新版弹层从接口取数据、不写 __INITIAL_STATE__，此时按容器里是否已有播放器判断；
+      // .player-container 比 video 先插入，等 video 会白等一次站点取流
       idFrom: (el) => {
         const loc = globalThis.location;
         const id = xhsNoteIdFromPath(loc && loc.pathname);
         if (!id) return null;
         if (xhsIsVideoNote(xhsStateNote(id))) return id;
-        return el && el.querySelector && el.querySelector("video") ? id : null;
+        return el && el.querySelector && el.querySelector(".player-container, .video-player-media, video")
+          ? id
+          : null;
       },
       kind: "detail",
       pageScope: /^\/(?:explore|discovery\/item)\/[0-9A-Za-z]{24}/,

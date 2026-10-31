@@ -216,8 +216,12 @@ test("xhsRules 详情锚点：弹层不写页面状态时按播放器节点认�
     value: { pathname: `/explore/${NOTE_ID}`, search: "" },
   });
   try {
-    assert.equal(detail.idFrom({ querySelector: (sel) => (sel === "video" ? {} : null) }), NOTE_ID);
-    assert.equal(detail.idFrom({ querySelector: () => null }), null);
+    const player = { querySelector: (sel) => (sel.includes("player-container") ? {} : null) };
+    assert.equal(detail.idFrom(player), NOTE_ID);
+    const videoOnly = { querySelector: (sel) => (sel.includes("video") ? {} : null) };
+    assert.equal(detail.idFrom(videoOnly), NOTE_ID);
+    const imageNote = { querySelector: (sel) => (sel.includes("swiper") ? {} : null) };
+    assert.equal(detail.idFrom(imageNote), null);
     assert.equal(detail.idFrom(null), null);
   } finally {
     if (prevLoc) Object.defineProperty(globalThis, "location", prevLoc);
