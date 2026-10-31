@@ -47,6 +47,7 @@
   - 拆分档 `dQw4w9WgXcQ`：新构建 `2160p 画面（无音轨）/ 1440p 画面（无音轨）/ 1080p/720p/480p/360p/360p 画面（无音轨）/ 240p/144p + 音频 131kbps`，**音频只列一条**
   - B站 `BV1GJ411x7h7`：`高清 1080P / 高清 720P / 流畅 360P`，无「高清 1080P 音频」
 - 构建：`npm run build` → `dist/douyin.user.js` **90 330 B**，`node --check` 通过，`@version 0.14.1`，sha256 `4638a26ea30de69859765c7de842dff9f8e8a434f0b6509439a14b286287d55e`
+- 发版：release v0.14.1 挂 `douyin.user.js` + `video-downloader-v0.5.3.crx/.zip`；固定别名 → `200`、90 330 B、`@version 0.14.1`，sha256 与本地全等；`releases/latest` → `v0.14.1`
 
 ## v0.14.0 ✅ {spec §M10 · 音视频合并下载}
 - 目标：分离流档位（YouTube 自适应 / B站 DASH）点一档只下一个文件（画面+音轨无损合并在浏览器内完成）
