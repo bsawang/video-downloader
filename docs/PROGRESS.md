@@ -26,6 +26,26 @@
 | M8.2 | ✅ | 批次 5 |
 | M8.3 | ✅ | 批次 5 |
 
+## 快道 v0.11.5 ✅ {spec §7 · /red_video 栏目笔记不挂按钮}
+- 缺陷（用户反馈）：首页正常，`https://www.xiaohongshu.com/red_video` 栏目仍有问题——从该栏目点开卡片后，播放弹层里没有下载按钮
+- 定位：
+  - 该栏目打开笔记时地址是 `/red_video/<24hex>`（如 `/red_video/6ae44628000000001802e5b0?xsec_token=…&xsec_source=pc_dual_feed`），不是 `explore` / `discovery/item`
+  - `NOTE_PATH` 与详情锚点 `pageScope` 都只放行 `explore|discovery/item` → `xhsNoteIdFromPath` 返回 null → 详情锚点 `idFrom` 直接 null，kernel 跳过
+  - 实测该弹层 `#noteContainer`/`.player-container`/`video` 齐全，`noteDetailMap` 里也有该 id 且 `note.type === "video"` —— 数据没问题，只是路径没认
+- 改动：
+  - [src/platforms/xiaohongshu/rules.js:7](file:///E:/work/ai/video-downloader/src/platforms/xiaohongshu/rules.js#L7) `NOTE_PATH` 增加 `red_video`；[src/platforms/xiaohongshu/rules.js:181](file:///E:/work/ai/video-downloader/src/platforms/xiaohongshu/rules.js#L181) 详情 `pageScope` 同步增加 `red_video`
+  - `tests/xiaohongshu.test.mjs`：`xhsNoteIdFromPath` 增 `/red_video/<id>` 与 `/red_video` 两例，详情 `pageScope` 增同两例
+  - 版本 0.11.4 → **0.11.5**；无 Mx.y 与验收判据变化
+- 单测：`npm test` **78 pass / 0 fail**
+- 真页收点（CDP 注入 0.11.5）：
+  - 修前（TM 0.11.4，同一 `/red_video/6ae44628…` 弹层）：`#noteContainer` 等节点齐全，按钮 0 个
+  - 修后：`__dlStats` `{candidates:1, anchors:1, mounted:1, downloadable:1}`；hover 后按钮 **78.7×37.25 @ (950.6,101)**，`elementFromPoint` 命中按钮本身
+  - 点开菜单：弹层 182×101.8，标题「美元这轮没加息 背后看到了什么？」，档位 `⬇ 1080p / 720p`（与页面状态 EF4 的 1080×1920 / 720×1280 两档一致）
+  - 点 720p：解析出 `https://sns-video-v6.xhscdn.com/stream/1/110/258/01eae445…_258.mp4?sign=…&t=…`，响应 `200`、`content-length` **20 031 057 B**，与状态里 720p EF4 的 `size` 完全相同
+  - `/red_video` 栏目网格：20 张卡片 / 20 个按钮全挂；注入 0.11.5 后 20 个新按钮，卡片按钮 27.1×24.9 @ (544.8,203.5)；点按钮 → 菜单 `⬇ 1080p / 720p`
+- 构建：`npm run build` → `dist/douyin.user.js` **55 712 B**，`@version 0.11.5`，sha256 `1704bb0d…f1d697`
+- 发版：release v0.11.5 挂同名资产；固定别名 → `200`、55 712 B、`@version 0.11.5`，sha256 与本地全等
+
 ## 快道 v0.11.4 ✅ {spec §7 · 弹层按钮延迟出现}
 - 缺陷（用户反馈）：小红书播放弹窗的下载按钮出现慢，要等一会儿才挂上
 - 定位（弹层实测时间线，相对点击卡片）：
