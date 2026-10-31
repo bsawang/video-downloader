@@ -45,7 +45,7 @@
   - 详情页播放器按钮回归：菜单仍为 1080P 画面/音频/720P/360P 四行
   - 期间发现并修正：`iconRight` 让位前按钮压住「稍后再看」，且重叠区点击会先被站内控件吃掉
 - 构建：`npm run build` → `dist/douyin.user.js` **39 927 B（39.0 KB）**，`node --check` 通过，头 `@version 0.10.0`、`@match` 三条
-- 发版：待补
+- 发版：`gh release create v0.10.0`（资产 `douyin.user.js` + `video-downloader-v0.5.3.crx` + `.zip`）；`releases/latest` → `v0.10.0`；固定别名拉取 `200`、39 927 B、`@version 0.10.0`，sha256 `89a12605…547` 与 GitHub 资产 digest 及本地 `dist/` 全等
 - 未覆盖：卡片页拿不到分P列表，多分P只下 P1；广告卡不注入；1080P 合流仍走待定项 #3
 
 ## v0.9.0 ✅ {spec §M7.3 · B站 DASH 分离流档位}
