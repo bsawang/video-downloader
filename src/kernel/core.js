@@ -62,6 +62,7 @@ export function start(adapter) {
       const btn = createButton(item, {
         isDetail: rule.kind === "detail",
         iconRight: rule.iconRight,
+        pos: rule.pos,
         onOpen:
           stub && adapter.loadItem
             ? async () => {

@@ -63,7 +63,8 @@ AnchorRule = { selector: string, kind: 'card' | 'detail', mount: string[],   // 
                idFrom: { type: 'attr' | 'idPrefix' | 'className' | 'mediaSrc' | 'innerHref', ... }
                        | ((el: Element) => string | null),                  // 函数形式：DOM 无 id 信号时由平台自行取
                pageScope?: RegExp, resolve?(el: Element): Element,
-               iconRight?: number }                                       // 列表按钮右偏移 px（让开站内控件）
+               iconRight?: number,                                        // 列表按钮右偏移 px（让开站内控件）
+               pos?: { top?: number, right?: number, bottom?: number, left?: number } } // 详情按钮四边偏移 px，缺省 right/bottom 16
 ```
 
 ### 2.3 硬边界
@@ -422,14 +423,14 @@ flowchart TD
 - 被谁依赖：M6
 
 #### M7.1 B站详情页识别与清晰度 🟢
-- **验收**：打开 `https://www.bilibili.com/video/BV...` 后播放器右下出现 **⬇ 下载**；点开列出的档位与 `accept_description` 一致且按清晰度降序；档位上限随当前账号/视频真实能力变化（未登录可能只有 720P，登录/VIP 提高），不做写死；接口失败时无按钮且无 pageerror
+- **验收**：打开 `https://www.bilibili.com/video/BV...` 后播放器右上、站内「反馈」按钮左侧出现 **⬇ 下载**（不压底部控制条）；点开列出的档位与 `accept_description` 一致且按清晰度降序；档位上限随当前账号/视频真实能力变化（未登录可能只有 720P，登录/VIP 提高），不做写死；接口失败时无按钮且无 pageerror
 - **依赖**：M1.2、M2.1、M3.1
 
 详细设计：
 - 数据流：entry 按 `matches` 选中 `bilibiliAdapter` → `start()` → 500ms / 每 2000ms `refresh` → `readBiliPage()` 读 `__INITIAL_STATE__` 的 `bvid/cid/p` → `GET api.bilibili.com/x/player/playurl?bvid&cid&fnver=0&fourk=1&fnval=1&qn=127`（`credentials: include`）→ `buildBiliStreams(accept_quality, accept_description)` → `store.upsert` → `renderAll` 用 `#bilibili-player` 规则（`idFrom = readBiliPage().cid`）→ 按 `mount` 回退挂按钮
 - 接口：`readBiliPage(loc?): {bvid,cid,page,title,author,part,pageCount}|null`；`biliPlayurlUrl(meta, qn): string`；`buildBiliStreams(data): Stream[]`；`biliParse(raw)`；`biliNormalizeStreams(raw)`；`biliResolveDownload(item, stream): Promise<DownloadPlan>`；`biliRefresh(store): Promise<void>`
 - 数据结构：`Stream { label, qn }` 不预存 url；`VideoItem` 附加 `bvid/cid/page/pageCount/part`（kernel 不读）
-- 算法与规则：当前分P取顶层 `__INITIAL_STATE__.p`/`.cid`（`videoData.cid` 恒为第 1P，不用）；缺 `p` 时回退 URL `?p=`，再回退第 1P；label 取 `accept_description[i]`，缺省 `${qn}P`，排序复用 `sortStreams` 的数字降序；`qn=127` 只为拿全量档位表，不代表实际可下载档；点选后按 `stream.qn` 重新请求同一接口取 `durl[0].url`
+- 算法与规则：当前分P取顶层 `__INITIAL_STATE__.p`/`.cid`（`videoData.cid` 恒为第 1P，不用）；缺 `p` 时回退 URL `?p=`，再回退第 1P；label 取 `accept_description[i]`，缺省 `${qn}P`，排序复用 `sortStreams` 的数字降序；`qn=127` 只为拿全量档位表，不代表实际可下载档；点选后按 `stream.qn` 重新请求同一接口取 `durl[0].url`；详情按钮用 `AnchorRule.pos = { top: 12, right: 56 }` 定位到 `.bpx-player-video-area` 右上，让开站内反馈按钮 `.bpx-player-top-issue`（36×24、右缩进 12）并垂直居中，底部控制条不再被遮挡
 - 错误与边界：非 `/video/` 页无播放器 → 不挂；`__INITIAL_STATE__` 缺失或无 `videoData` → `readBiliPage` 返回 null（不发请求）；接口 `code !== 0` 或 `accept_quality` 为空 → 不写 store；`durl.length > 1` → toast「分段视频暂不支持（共 N 段）」；直链约 2 小时过期 → 点下载时现取
 - 测试要点：`tests/bilibili.test.mjs`（页面状态读取、URL、档位排序、playurl 解析、直链解析、refresh 每 cid 一次、契约）；真页 CDP：短链视频弹层 `[1080P, 720P, 360P]`，选取后 CDN Range 请求 `206 video/mp4`
 
@@ -499,6 +500,7 @@ flowchart TD
 | 2026-10-29 | 播放页自动跳转后右侧列表按钮消失：页面重渲染清掉外来按钮节点，而 `renderedIds` 只按 `videoId` 记账，判定「已挂载」后永不补 | [src/kernel/core.js:33](file:///E:/work/ai/video-downloader/src/kernel/core.js#L33) `renderedIds` 改存 `{ videoId, btn }`，跳过条件加 `btn.isConnected`；只有 id 变化才清旧按钮 | 真页 CDP（收藏页弹层，79 个作者作品条目）：修复前 42 个 `li` 全带 `data-dl-hover` 但 0 按钮；修复后 79/79 有条目按钮；手动删掉全部 100 个按钮模拟页面重绘 → 2.5s 后恢复 82 个、列表 79/79；再观察 5s 计数不增长（无抖动） | 对照 M3.1「扫描到的锚点都有按钮」，判据未变，修的是重挂判定 |
 | 2026-10-31 | 标题以「」『』【】 开头的卡片按钮变形：站点规则 `[title^="「"], [title^="『"], [title^="【"] { text-indent:-.6em }` 命中我们带 `title` 的按钮，shrink-to-fit 宽度被缩 7.8px（33 → 25.2） | [src/kernel/ui.js:21](file:///E:/work/ai/video-downloader/src/kernel/ui.js#L21) 详情与卡片两套按钮 `cssText` 加 `text-indent:0` | 真页首页 `BV1ecnb6oEnt` 卡片：修复前 25.2×29.5、`text-indent:-7.8px`；注入 0.10.1 后 33×29.5、`text-indent:0px`；点开菜单仍 4 档 | 对照 M3.2「hover 出按钮」，判据未变，仅修被站点样式带偏的按钮尺寸 |
 | 2026-10-31 | 广告型推荐卡不注入按钮：`href` 是 `cm.bilibili.com` 跳转埋点，真实目标 BV 只在 `data-target-url` 上，原 `biliCardBvid` 只认 `a[href*="/video/BV"]` | [src/platforms/bilibili/rules.js:31](file:///E:/work/ai/video-downloader/src/platforms/bilibili/rules.js#L31) `biliCardBvid` 遍历 `a[href], a[data-target-url]`；`tests/bilibili.test.mjs` 增广告卡用例 | 真页首页「虽然被推到烂…邪修脱单群」卡：修复前 0 按钮；注入 0.10.1 后 33×29.5、点击出 4 档菜单（`BV15KWJzWEAo` 的 `view` + 两路 playurl 成功）；无 BV 目标的广告卡仍 0 按钮；`npm test` 56 pass | 对照 M7.4「每张带 BV 目标的卡片 hover 出 ⬇；只有 `cm.bilibili.com` 跳转、无 BV 的广告卡不注入」，判据未变 |
+| 2026-10-31 | B站详情页按钮压住播放器底部控制条：固定 `right:16px;bottom:16px` | [src/kernel/ui.js:28](file:///E:/work/ai/video-downloader/src/kernel/ui.js#L28) `createButton` 新增 `pos`（top/right/bottom/left 数字 px，缺省仍右下）；[src/kernel/core.js:65](file:///E:/work/ai/video-downloader/src/kernel/core.js#L65) 透传 `rule.pos`；[src/platforms/bilibili/rules.js:74](file:///E:/work/ai/video-downloader/src/platforms/bilibili/rules.js#L74) 详情规则 `pos:{top:12,right:56}`；`tests/bilibili.test.mjs` 增断言 | 真页 `BV1ecnb6oEnt`（注入 0.10.2）：新按钮 1075–1160 × 184–219，站内反馈按钮 `.bpx-player-top-issue` 1168–1204 × 190–214，间距 8px、纵向居中；点击菜单仍 4 档；`npm test` 56 pass | 对照 M7.1「播放器上出现 ⬇ 下载、不遮挡控件」，按用户反馈调整位置，交互与档位判据未变 |
 
 ## 8. 调整记录（标准档 / 完整档变更）
 

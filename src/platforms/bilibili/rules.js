@@ -70,6 +70,8 @@ export const biliRules = {
       kind: "detail",
       pageScope: /^\/video\//,
       mount: [".bpx-player-video-area", ".bpx-player-container", "self"],
+      // 右上角是站内「反馈」按钮（.bpx-player-top-issue，12px 内缩 36×24），按钮让到它左侧并垂直居中
+      pos: { top: 12, right: 56 },
     },
     // 卡片类：视频Id 用 bvid，cid 与档位在点开时经接口现取（见 adapter.loadItem）
     // iconRight：卡片右上角是站内「稍后再看」，按钮左移让位

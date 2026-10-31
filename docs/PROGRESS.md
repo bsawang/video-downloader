@@ -23,6 +23,26 @@
 | M7.3 | ✅ | 批次 3 |
 | M7.4 | ✅ | 批次 4 |
 
+## 快道 v0.10.2 ✅ {spec §7 · 对照 M7.1 详情按钮位置}
+- 缺陷（用户真页反馈）：B站详情页下载按钮固定在播放器右下（`right:16px; bottom:16px`），压住底部控制条（全屏/网页全屏等）；要求移到右上、站内「反馈」按钮左侧
+- 调研（`BV1ecnb6oEnt` 真页，播放器 `.bpx-player-video-area` 968×545 @248,172）：
+  - 站内反馈按钮 `.bpx-player-top-issue`：36×24 @1168,190（右缩进 12、顶缩进 18），位于 `.bpx-player-top-wrap` 内，控制条淡出时一起隐藏
+  - 原按钮 85×35 @1115,666（右/底各 16），正好压在底部控制条右端
+- 改动：
+  - `src/kernel/ui.js`：`createButton` 增加 `pos`（只收 `top/right/bottom/left` 数字 px），详情按钮缺省仍 `right:16;bottom:16`
+  - `src/kernel/core.js`：把 `rule.pos` 透传给 `createButton`
+  - `src/platforms/bilibili/rules.js`：详情锚点 `pos: { top: 12, right: 56 }`
+  - `docs/spec.md`：§2.2 `AnchorRule` 增加 `pos?`；M7.1 验收与算法描述同步新位置
+  - 版本 0.10.1 → **0.10.2**；抖音详情按钮不受影响（未配 `pos`，仍右下）
+- 单测：`npm test` **56 pass / 0 fail**（`biliRules` 用例增加详情 `pos` 断言）
+- 真页收点（登录态，注入 0.10.2 等价构建，新旧按钮用 `data-old` 区分）：
+  - 新按钮 85×35 @1075,184（右缘 1160）→ 与反馈按钮（左缘 1168）间距 8px，纵向 184–219 vs 190–214 居中；底部控制条不再遮挡
+  - 点击新按钮出菜单 `[1080P 画面、1080P 音频、720P、360P]`，与改动前一致
+  - 同一页面旧实例按钮仍在右下 @1115,666，reload 后仅保留单实例
+- 构建：`npm run build` → `dist/douyin.user.js` **40 812 B**，`@version 0.10.2`，sha256 `8f8c13a1…b1e`
+- 发版：`gh release create v0.10.2`（资产 `douyin.user.js` + `video-downloader-v0.5.3.crx` + `.zip`）；`releases/latest` → `v0.10.2`；固定别名拉取 `200`、40 812 B、`@version 0.10.2`，sha256 与本地 `dist/` 全等
+- 未覆盖：站内顶部控制条淡出时本站按钮仍常驻（有意为之）；全屏/网页全屏未单独回归（位置随四边内缩，不变）
+
 ## 快道 v0.10.1 ✅ {spec §7 · 对照 M7.4 卡片注入 / M3.2 按钮样式}
 - 缺陷（用户真页反馈，首页推荐流两张卡）：
   - 「虽然被推到烂，但还是想夸一夸的邪修脱单群」无按钮：该卡是广告型推荐，`href` 是 `cm.bilibili.com/cm/api/fees/pc/sync/v2?msg=…` 埋点，真实目标 `https://www.bilibili.com/video/BV15KWJzWEAo?...` 只在锚点的 `data-target-url` 属性上；`biliCardBvid` 只查 `a[href*="/video/BV"]`，取不到 id 自然不挂

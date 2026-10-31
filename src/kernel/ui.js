@@ -13,14 +13,26 @@ export function ensureHoverStyle() {
   root.appendChild(hoverStyle);
 }
 
-export function createButton(item, { isDetail, onPick, onOpen, iconRight }) {
+const SIDES = ["top", "right", "bottom", "left"];
+
+// pos 只收数字像素值，避免平台配置写进任意 CSS
+function sideCss(pos, fallback) {
+  const css = pos
+    ? SIDES.filter((k) => typeof pos[k] === "number")
+        .map((k) => k + ":" + pos[k] + "px;")
+        .join("")
+    : "";
+  return css || fallback;
+}
+
+export function createButton(item, { isDetail, onPick, onOpen, iconRight, pos }) {
   const btn = document.createElement("button");
   btn.setAttribute("data-dl-icon", "1");
   btn.textContent = isDetail ? "⬇ 下载" : "⬇";
   btn.title = (item.title || "").slice(0, 30);
   // text-indent:0：站点有 [title^=「] 之类的规则，会把带 title 的按钮按标题排缩进
   btn.style.cssText = isDetail
-    ? "position:absolute;right:16px;bottom:16px;z-index:99999;text-indent:0;" +
+    ? "position:absolute;" + sideCss(pos, "right:16px;bottom:16px;") + "z-index:99999;text-indent:0;" +
       "background:rgba(47,107,255,.95);color:#fff;border:none;border-radius:10px;" +
       "padding:10px 18px;font-size:15px;font-weight:600;cursor:pointer;" +
       "box-shadow:0 3px 10px rgba(0,0,0,.4);"

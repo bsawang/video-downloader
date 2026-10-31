@@ -387,6 +387,9 @@ test("biliRules 覆盖卡片页：www 全站 + 搜索站，四条卡片规则", 
   ]);
   // 卡片按钮让开右上角站内控件
   assert.ok(biliRules.anchors.filter((a) => a.kind === "card").every((a) => a.iconRight === 44));
+  // 播放器按钮挂右上，让开底部控制条并停在站内「反馈」按钮左侧
+  const detail = biliRules.anchors.find((a) => a.kind === "detail");
+  assert.deepEqual(detail.pos, { top: 12, right: 56 });
 });
 
 function mockCardApi({ viewCode = 0 } = {}) {
