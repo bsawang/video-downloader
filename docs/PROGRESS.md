@@ -41,6 +41,7 @@
   - 抖音回归：`__dlStats` 与按钮数正常（kernel 改动未破坏原平台）
   - 收点后停掉本地注入服务并 reload；`addScriptToEvaluateOnNewDocument` 在本次 Chrome 生命周期内仍存在但资源不可达，重启 Chrome 后彻底清除
 - 构建：`npm run build` → `dist/douyin.user.js` **29,899 B（27.5 KB）**，`node --check` 通过，头含 `0.8.0` + 两条 `@match`
+- 发版：`gh release create v0.8.0`（资产 `douyin.user.js` + `video-downloader-v0.5.3.crx` + `.zip`）；`gh release download` 拉回哈希 `5e18c1be…4b6` 与本地 `dist/` 全等，`@version 0.8.0`；`releases/latest` 指向 `v0.8.0`
 - 未覆盖：B站搜索页/个人主页/番剧/直播未接；DASH 专属档位与分段视频（`durl.length > 1`）明确提示不支持；未登录下的档位上限是平台策略，非提取缺陷
 
 ## 快道 v0.7.3 ✅ {spec §7 · 对照 M3.1 锚点挂载}
