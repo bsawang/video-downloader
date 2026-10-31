@@ -26,6 +26,30 @@
 | M8.2 | ✅ | 批次 5 |
 | M8.3 | ✅ | 批次 5 |
 
+## 快道 v0.11.2 ✅ {spec §7 · 小红书登录态取档位失败 + 弹层档位不全}
+- 缺陷（用户反馈）：已登录小红书后点下载提示取链接失败；另外菜单档位比站点实际提供的少
+- 定位一（取链失败）：
+  - 登录态笔记页 HTML 的 `window.__INITIAL_STATE__` 不是严格 JSON：值位置有裸 `undefined`，还夹带 `new Map([])`（如 `tailMap`）
+  - `xhsStateFromHtml` 只做 `JSON.parse`，解析失败返回 `null` → `xhsFetchNote` 抛「获取视频信息失败」→ 卡片 `onOpen` 拒绝 → `createButton` 的 catch 静默返回，表现为「点了没反应/取链失败」
+  - 实证：登录态请求笔记页 `200`、124 113 B，状态串含 `new Map([])`；修复前解析 `null`
+- 定位二（档位差异）：
+  - 同一笔记 `6ae3fba90000000016019c84`，页面状态 `note.video.media.stream` 只有 `EF4:720x1280`（弹层与直开详情页均如此），播放器实际取 `_258.mp4` 720p 播放
+  - 同一 id 的笔记页 HTML 状态里有完整阶梯：`EF5:720/1080/1440/2160 + EF4:720`
+  - 旧实现优先用页面状态且 store 缓存后不再取 → 菜单只列 720p
+- 改动：
+  - `src/platforms/xiaohongshu/rules.js:119` 新增 `xhsFixStateLiterals`：裸 `undefined/NaN/Infinity → null`、`new Map([...]) → 对象`、`new Set([...]) → 数组`，严格 JSON 失败后宽松化重试（`rules.js:139`）
+  - `src/platforms/xiaohongshu/adapter.js:20` 新增 `XHS_FULL` 标记 + `xhsMergeStreams`（页面状态 / 缓存 / HTML 三源按档位取并集，先到先得）；`xhsLoadNote`（`:48`）每次都尝试取一份笔记页 HTML 补齐，成功后打标记；`xhsPrefetch`（`:103`）与 `xhsRefresh`（`:111`）改为走同一补全路径，补过的 id 不再请求；`xhsResolveDownload`（`:137`）在页面状态缺该档时按 HTML 取新链，令牌缺失时回退地址栏
+  - 版本 0.11.1 → **0.11.2**；无 Mx.y 与验收判据变化
+- 单测：`npm test` **77 pass / 0 fail**（新增 Map/Set 字面量解析、HTML 补全缺档、缺档重取新链、补全后不重复请求等用例；RED 阶段 `xhsStateFromHtml` 返回 null 触发 TypeError）
+- 真页收点（CDP 注入 0.11.2 构建）：
+  - 直开笔记 `6ae3fba9…`：页面状态只有 `EF4:720`（播放器 720×1280 blob），菜单为 `⬇ 2160p / 1440p / 1080p / 720p` 四行；补全请求 1 次（`explore/<id>` transfer 36 446 B、304 ms）
+  - 弹层同一笔记：同样四行；点 `2160p` 下载 `_523.mp4` **30 642 312 B** 完成
+  - `/red_video` 卡片 `6ae338e4…`：hover 预取后菜单 `⬇ 1080p / 720p`，点 `720p` 下载 **97 539 892 B**，toast `✓ 下载完成`
+  - 链接对照：站点播放器 `sns-video-v6.xhscdn.com/stream/79/110/258/…_258.mp4?sign=cd9d…&t=6aea52e9`；下载 2160p `…/523/…_523.mp4?sign=c2cb…&t=6aea53fb`——同主机同路径前缀，仅档位段不同；`sign/t` 每次加载重签；状态里的 `http://` 已升 `https://`
+- 构建：`npm run build` → `dist/douyin.user.js` **54 805 B**，`@version 0.11.2`，sha256 `97f46ffa…fe12`
+- 发版：release v0.11.2 挂同名资产；固定别名 `releases/latest/download/douyin.user.js` → `200`、54 805 B、`@version 0.11.2`，sha256 与本地全等
+- 未覆盖：未登录/无令牌时仍只能拿到页面状态里的档位（小红书卡片正常渲染都带令牌）；97 MB 级 720p 走 blob 的整体内存峰值未单独测量（沿用既有下载路径）
+
 ## 快道 v0.11.1 ✅ {spec §7 · 按钮箭头被渲染成彩色 emoji}
 - 缺陷（用户反馈）：小红书页面的下载按钮箭头变成彩色 emoji 图标，不是原来的单色箭头
 - 定位：
