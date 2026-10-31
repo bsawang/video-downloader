@@ -54,6 +54,7 @@
   - 临时清理：成功与失败两次运行后 OPFS 根目录只剩验证输出文件，`dl-merge-*` 无残留
   - 过程缺陷：首次真页点下载报 `mergeFmp4Blobs is not defined`（`tools/build.mjs` 的 `ORDER` 漏了 `kernel/merge.js`），补 `ORDER` 并新增 `tests/build.test.mjs` 防回归；修复后重跑通过
 - 构建：`npm run build` → `dist/douyin.user.js` **90 498 B**，`node --check` 通过，`@version 0.14.0`，sha256 `11800a5809b9d158d0bb32015e8ebd9ec76b24ed56cfbc315a63a49d10b9567c`
+- 发版：release v0.14.0 挂 `douyin.user.js` + `video-downloader-v0.5.3.crx/.zip`；固定别名 → `200`、90 498 B、`@version 0.14.0`，sha256 与本地全等；`releases/latest` → `v0.14.0`
 
 
 ## v0.13.0 ✅ {spec §M9.4 · Shorts 接入 + hover 预览下按钮存活}
