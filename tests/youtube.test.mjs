@@ -58,6 +58,20 @@ const player = {
         url: "https://rr1.example.com/v400",
       },
       {
+        itag: 308,
+        mimeType: 'video/webm; codecs="vp9"',
+        qualityLabel: "1440p",
+        bitrate: 5000000,
+        url: "https://rr1.example.com/v308",
+      },
+      {
+        itag: 134,
+        mimeType: 'video/mp4; codecs="avc1.4d401e"',
+        qualityLabel: "360p",
+        bitrate: 500000,
+        url: "https://rr1.example.com/v134",
+      },
+      {
         itag: 999,
         mimeType: 'video/mp4; codecs="avc1.4d401f"',
         qualityLabel: "720p",
@@ -167,6 +181,14 @@ test("ytBuildStreams 单文件带音轨、自适应 MP4 与 AAC 合成合并档�
     streams.map((s) => s.label),
     ["1440p", "1080p", "360p"]
   );
+  const p1440 = streams.find((s) => s.label === "1440p");
+  assert.equal(p1440.itag, 400, "同档 MP4 AV1 优先于 WebM VP9");
+  assert.equal(p1440.kind, "mux");
+  assert.equal(
+    streams.some((s) => s.label === "360p 画面（无音轨）"),
+    false,
+    "单文件已覆盖 360p，不再重复列画面"
+  );
   const p1080 = streams.find((s) => s.label === "1080p");
   assert.equal(p1080.itag, 137);
   assert.equal(p1080.kind, "mux");
@@ -204,6 +226,7 @@ test("ytBuildStreams WebM/VP9 或无 AAC 时保留拆分画面", () => {
     [
       ["1440p 画面（无音轨）", "video"],
       ["1080p 画面（无音轨）", "video"],
+      ["360p 画面（无音轨）", "video"],
     ]
   );
 });
@@ -239,7 +262,8 @@ test("ytFetchPlayer 请求 InnerTube 并走 ytcfg 的 key", async () => {
     assert.equal(mock.calls[0].opts.method, "POST");
     const body = JSON.parse(mock.calls[0].opts.body);
     assert.equal(body.videoId, ID);
-    assert.equal(body.context.client.clientName, "ANDROID_VR");
+    assert.equal(body.context.client.clientName, "VISIONOS");
+    assert.equal(body.context.client.osName, "visionOS");
     assert.equal(body.contentCheckOk, true);
   } finally {
     mock.restore();
@@ -295,6 +319,24 @@ test("ytFetchPlayer 首个 client 被风控时换 IOS 重试", async () => {
   }
 });
 
+test("ytFetchPlayer VISIONOS 与 IOS 都失败时落到 ANDROID_VR", async () => {
+  const restoreCfg = withYtcfg("K");
+  const mock = mockFetch((url, opts, n) =>
+    n < 3 ? { ok: false, status: 500, json: async () => ({}) } : ok(clone(player))
+  );
+  try {
+    const data = await ytFetchPlayer(ID);
+    assert.equal(data.videoDetails.videoId, ID);
+    assert.deepEqual(
+      mock.calls.map((c) => JSON.parse(c.opts.body).context.client.clientName),
+      ["VISIONOS", "IOS", "ANDROID_VR"]
+    );
+  } finally {
+    mock.restore();
+    restoreCfg();
+  }
+});
+
 test("ytLoadVideo 取档位写 store，第二次命中缓存", async () => {
   const restoreCfg = withYtcfg("K");
   const mock = mockFetch(() => ok(clone(player)));
@@ -321,8 +363,8 @@ test("ytLoadVideo 并发同一 id 只发一次请求，失败后可重试", asyn
     fail = false;
     const [a, b] = await Promise.all([ytLoadVideo(ID, store), ytLoadVideo(ID, store)]);
     assert.equal(a, b);
-    // 失败那次两个 client 各一发；并发成功只发一发
-    assert.equal(mock.calls.length, 3);
+    // 失败那次三个 client 各一发；并发成功只发一发
+    assert.equal(mock.calls.length, 4);
   } finally {
     mock.restore();
     restoreCfg();

@@ -5,18 +5,17 @@ const YT_PLAYER = "https://www.youtube.com/youtubei/v1/player";
 // ytcfg 取不到时兜底（公开网页端 key，多年未变）
 const YT_FALLBACK_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
 // 网页端自身只给 SABR（无逐档直链），逐档直链要走移动端 client。
-// ANDROID_VR 有 progressive（单文件带音轨），但音乐厂牌等版权方视频会回
-// LOGIN_REQUIRED /「Sign in to confirm you're not a bot」；IOS 对这些视频仍给
-// adaptive 直链（1080p avc1 + AAC），所以按顺序兜底。
+// VISIONOS：yt-dlp 默认 jsl 客户端，给到 2160p 的 AV1 MP4（可配 AAC 合并），
+// 且直链对 Range 请求正常；ANDROID_VR 虽带 progressive，但直链在浏览器里
+// 普遍 403/Failed to fetch，已降为最后兜底。IOS 作为中间层兜 LOGIN_REQUIRED。
 const YT_CLIENTS = [
   {
-    clientName: "ANDROID_VR",
-    clientVersion: "1.62.27",
-    androidSdkVersion: 32,
-    osName: "Android",
-    osVersion: "12",
-    deviceMake: "Oculus",
-    deviceModel: "Quest 3",
+    clientName: "VISIONOS",
+    clientVersion: "1.02",
+    deviceMake: "Apple",
+    deviceModel: "RealityDevice17,1",
+    osName: "visionOS",
+    osVersion: "26.5.23O471",
     hl: "en",
     gl: "US",
   },
@@ -26,6 +25,17 @@ const YT_CLIENTS = [
     deviceModel: "iPhone16,2",
     osName: "iPhone",
     osVersion: "18.3.2.22D82",
+    hl: "en",
+    gl: "US",
+  },
+  {
+    clientName: "ANDROID_VR",
+    clientVersion: "1.62.27",
+    androidSdkVersion: 32,
+    osName: "Android",
+    osVersion: "12",
+    deviceMake: "Oculus",
+    deviceModel: "Quest 3",
     hl: "en",
     gl: "US",
   },
@@ -54,11 +64,12 @@ function ytHttps(url) {
   return String(url || "").replace(/^http:\/\//, "https://");
 }
 
-// 同分辨率优先 H.264（浏览器与后续封装最稳），再比码率
+// 容器优先：MP4 才能和 AAC 音轨无损合并成一条。同档位里
+// MP4+avc1 > MP4+av01 > MP4 其它 > WebM+vp9 > WebM+av01 > 其它
 function ytCodecRank(mime) {
-  if (/avc1/i.test(mime)) return 0;
-  if (/vp0?9/i.test(mime)) return 1;
-  return 2;
+  const s = String(mime || "").toLowerCase();
+  const codec = /avc1/.test(s) ? 0 : /av01/.test(s) ? 1 : 2;
+  return (/^video\/mp4/.test(s) ? 0 : 3) + codec;
 }
 
 function ytBetter(a, b) {
@@ -117,10 +128,11 @@ export function ytBuildStreams(data) {
     groups.get(label).push(f);
   }
   for (const [quality, list] of groups) {
+    // 单文件档已覆盖同分辨率（自带音轨），不再重复列一条画面
+    if (seen.has(quality)) continue;
     const best = list.reduce((a, b) => (ytBetter(b, a) ? b : a), list[0]);
     // MP4 画面 + AAC 音轨 → 一条合并档；WebM/VP9 或无 AAC 时仍列拆分画面
-    if (bestAudio && /^video\/mp4/i.test(String(best.mimeType || "")) && !seen.has(quality)) {
-      seen.add(quality);
+    if (bestAudio && /^video\/mp4/i.test(String(best.mimeType || ""))) {
       out.push({
         label: quality,
         url: ytHttps(best.url),
@@ -131,10 +143,12 @@ export function ytBuildStreams(data) {
       });
       continue;
     }
-    const label = quality + " 画面（无音轨）";
-    if (seen.has(label)) continue;
-    seen.add(label);
-    out.push({ label, url: ytHttps(best.url), itag: Number(best.itag), kind: "video" });
+    out.push({
+      label: quality + " 画面（无音轨）",
+      url: ytHttps(best.url),
+      itag: Number(best.itag),
+      kind: "video",
+    });
   }
 
   // 独立音频只在存在无法合并的画面档时列出；能合并的档自带音轨，不再重复
@@ -307,7 +321,7 @@ export async function ytResolveDownload(item, stream) {
     (stream.itag ? fresh.find((s) => s.itag === stream.itag) : null);
   const videoUrl = (hit && hit.url) || stream.url;
   if (!videoUrl) throw new Error("该清晰度不可用");
-  // IOS client 下发的直链不带 Range 会直接 403（手机端只允许分段请求）；
+  // 移动端 client 下发的直链不带 Range 会直接 403（只允许分段请求）；
   // bytes=0- 照样拿到整份，Content-Length 仍是总大小
   const req = { credentials: "omit", headers: { Range: "bytes=0-" } };
   if (stream.kind === "mux") {

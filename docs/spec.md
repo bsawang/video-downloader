@@ -559,22 +559,22 @@ flowchart TD
 ### M9 平台接入（YouTube）🟢
 模块概要：
 - 职责：YouTube 播放页与列表卡片的识别、档位获取、直链解析、下载命名，全部差异留在本模块
-- 输入：页面地址 `watch?v=<11位id>` / `shorts/<11位id>` / 卡片 DOM（`yt-lockup-view-model`、`ytm-shorts-lockup-view-model`、`ytd-video-renderer`、`ytd-compact-video-renderer`、`ytd-reel-item-renderer` 内的 `/watch?v=` 或 `/shorts/` 链接）/ 同源 `youtubei/v1/player`（`ANDROID_VR` 客户端，失败回退 `IOS`）
+- 输入：页面地址 `watch?v=<11位id>` / `shorts/<11位id>` / 卡片 DOM（`yt-lockup-view-model`、`ytm-shorts-lockup-view-model`、`ytd-video-renderer`、`ytd-compact-video-renderer`、`ytd-reel-item-renderer` 内的 `/watch?v=` 或 `/shorts/` 链接）/ 同源 `youtubei/v1/player`（客户端 `VISIONOS` → `IOS` → `ANDROID_VR` 依次兜底）
 - 输出：`youtubeAdapter`（`PlatformAdapter`）
 - 依赖：M1、M2、M3（契约）
 - 被谁依赖：M6
 
 #### M9.1 播放页识别与清晰度 🟢
-- **验收**：打开 `https://www.youtube.com/watch?v=<11位id>` 后，播放器右上 12px 处出现 **⬇ 下载**；菜单按清晰度降序列出 `Np`（单文件含音轨）、`Np`（自适应画面 + AAC 合并），与 `youtubei/v1/player` 返回的 `formats/adaptiveFormats` 一致；同分辨率优先 H.264；自适应画面为 WebM/VP9 或没有 AAC 音轨时，保留 `Np 画面（无音轨）` 拆分条目；只有存在拆分画面档时才额外列一条 `音频 <kbps>kbps`，全部能合并时不列音频；页面无 pageerror
+- **验收**：打开 `https://www.youtube.com/watch?v=<11位id>` 后，播放器右上 12px 处出现 **⬇ 下载**；菜单按清晰度降序列出 `Np`（单文件含音轨）、`Np`（自适应画面 + AAC 合并），与 `youtubei/v1/player` 返回的 `formats/adaptiveFormats` 一致；同分辨率按容器优先（MP4+avc1 → MP4+av01 → MP4 其它 → WebM）选流，1440p/2160p 由 AV1 MP4 与 AAC 合并成单条；单文件已覆盖的分辨率不再重复列画面；自适应画面为 WebM/VP9 或没有 AAC 音轨时，保留 `Np 画面（无音轨）` 拆分条目；只有存在拆分画面档时才额外列一条 `音频 <kbps>kbps`，全部能合并时不列音频；页面无 pageerror
 - **依赖**：M1.2、M2.1、M3.1
 
 详细设计：
 - 数据流：entry 按 `matches` 选中 `youtubeAdapter` → `start()` → 500ms / 每 2000ms `refresh` → `ytRefresh` 从地址栏取 `v=` → 已有档位跳过，否则 `ytLoadVideo` 请求 InnerTube → `ytParsePlayer` 转条目 → `store.upsert` → `renderAll` 用 `#movie_player` 规则（`idFrom` 读地址栏 id）→ 挂 `self`，`pos = { top: 12, right: 12 }`
 - 接口：`ytVideoIdFromUrl(href): string|null`；`ytCurrentVideoId(loc?): string|null`；`ytApiKey(): string`；`ytPlayerBody(videoId, client?)`；`ytFetchPlayer(videoId): Promise<object>`；`ytBuildStreams(data): Stream[]`；`ytParsePlayer(data, videoId?): VideoItem|null`；`ytLoadVideo(videoId, store): Promise<VideoItem>`；`ytRefresh(store): Promise<void>`；`ytStub(videoId, el, rule)`
-- 数据结构：`Stream { label, url, itag, kind? }`（`kind` 缺省为单文件、`video`/`audio` 为分离流）；`VideoItem { videoId, title: videoDetails.title, author: videoDetails.author, streams }`；`ytPending: Map<id, Promise>` 并发去重；`YT_CLIENTS` 依次为 `{ clientName: "ANDROID_VR", clientVersion: "1.62.27", androidSdkVersion: 32, osName: "Android", osVersion: "12", deviceMake: "Oculus", deviceModel: "Quest 3", hl: "en", gl: "US" }` 与 `{ clientName: "IOS", clientVersion: "20.10.4", deviceModel: "iPhone16,2", osName: "iPhone", osVersion: "18.3.2.22D82", hl: "en", gl: "US" }`
-- 算法与规则：API key 取 `ytcfg.get("INNERTUBE_API_KEY")`，取不到用固定 key 兜底；`formats` 中 `mimeType` 以 `video/` 开头且有 `url` 的按 `qualityLabel` 入列（单文件含音轨，label 即 `qualityLabel`）；`adaptiveFormats` 中视频按 `qualityLabel` 分组，组内按「avc1 → vp9 → 其他」再比 `bitrate` 取最优；选中项是 `video/mp4` 且存在 AAC 音轨（`audio/mp4` 中码率最高）时，该档输出一条 `kind: "mux"`（label 即 `qualityLabel`，附 `audioItag`），否则输出 `qualityLabel + " 画面（无音轨）"` 的 `kind: "video"`；仅当菜单里存在 `kind: "video"` 拆分画面档时，才追加一条音频档，label 为 `音频 <round(bitrate/1000)>kbps`；全部经 `sortStreams` 降序；`ANDROID_VR` 有 progressive（单文件带音轨），音乐厂牌等版权方视频会回 `LOGIN_REQUIRED`（`reason` 含「not a bot」），此时换 `IOS` 重试——`IOS` 对这些视频仍给 adaptive 直链（1080p 仍是 avc1 + AAC），但没有单文件档；播放页 `stub` 先挂占位按钮，标题取页面标题去掉 ` - YouTube` 后缀
-- 错误与边界：`playabilityStatus.status !== "OK"` 且两个 client 都失败 → 抛错：`reason` 含「not a bot」→「YouTube 要求人机验证，请先在浏览器打开该视频后再试」，`LOGIN_REQUIRED` →「该视频需要登录或年龄验证」，其余用 `reason`；非 2xx → `HTTP <status>`；OK 但无任何 `formats/adaptiveFormats` → 换下一个 client，全部落空 →「该视频没有可下载的清晰度」；refresh 失败静默、5s 内不重试同一 id；SPA 切视频后地址变化 → 新 id 走 stub + refresh 自愈；直播页不匹配（非 `/watch`、非 `/shorts`）；Shorts 见 M9.4
-- 测试要点：`tests/youtube.test.mjs`（id 解析、单文件/自适应/音频构建、AVC 优先、排序、`ytParsePlayer` 元信息、`ytFetchPlayer` 请求体/风控回退、`ytLoadVideo` 缓存/并发、`ytRefresh` 跳过已有档位）；真页 CDP：`watch?v=dQw4w9WgXcQ` 按钮挂载与 10 档菜单、1080p 实际传输 77.2 MiB
+- 数据结构：`Stream { label, url, itag, kind? }`（`kind` 缺省为单文件、`video`/`audio` 为分离流）；`VideoItem { videoId, title: videoDetails.title, author: videoDetails.author, streams }`；`ytPending: Map<id, Promise>` 并发去重；`YT_CLIENTS` 依次为 `{ clientName: "VISIONOS", clientVersion: "1.02", deviceMake: "Apple", deviceModel: "RealityDevice17,1", osName: "visionOS", osVersion: "26.5.23O471", hl: "en", gl: "US" }`、`{ clientName: "IOS", clientVersion: "20.10.4", deviceModel: "iPhone16,2", osName: "iPhone", osVersion: "18.3.2.22D82", hl: "en", gl: "US" }` 与 `{ clientName: "ANDROID_VR", clientVersion: "1.62.27", androidSdkVersion: 32, osName: "Android", osVersion: "12", deviceMake: "Oculus", deviceModel: "Quest 3", hl: "en", gl: "US" }`
+- 算法与规则：API key 取 `ytcfg.get("INNERTUBE_API_KEY")`，取不到用固定 key 兜底；`formats` 中 `mimeType` 以 `video/` 开头且有 `url` 的按 `qualityLabel` 入列（单文件含音轨，label 即 `qualityLabel`）；`adaptiveFormats` 中视频按 `qualityLabel` 分组，组内按容器优先（`video/mp4` + avc1 → `video/mp4` + av01 → MP4 其它 → WebM + vp9 → WebM + av01，同档再比 `bitrate`）取最优；单文件已占用同 `qualityLabel` 时整档跳过；选中项是 `video/mp4` 且存在 AAC 音轨（`audio/mp4` 中码率最高）时，该档输出一条 `kind: "mux"`（label 即 `qualityLabel`，附 `audioItag`），否则输出 `qualityLabel + " 画面（无音轨）"` 的 `kind: "video"`；仅当菜单里存在 `kind: "video"` 拆分画面档时，才追加一条音频档，label 为 `音频 <round(bitrate/1000)>kbps`；全部经 `sortStreams` 降序；`VISIONOS` 没有 progressive，但 adaptive 覆盖到 2160p（含 AV1 MP4），直链可分段下载，作为首选；被风控（`reason` 含「not a bot」）或返回空流时换 `IOS`，再换 `ANDROID_VR`（`ANDROID_VR` 带 progressive 单文件，但直链在浏览器里普遍 403/Failed to fetch，仅作最后兜底）；播放页 `stub` 先挂占位按钮，标题取页面标题去掉 ` - YouTube` 后缀
+- 错误与边界：`playabilityStatus.status !== "OK"` 且三个 client 都失败 → 抛错：`reason` 含「not a bot」→「YouTube 要求人机验证，请先在浏览器打开该视频后再试」，`LOGIN_REQUIRED` →「该视频需要登录或年龄验证」，其余用 `reason`；非 2xx → `HTTP <status>`；OK 但无任何 `formats/adaptiveFormats` → 换下一个 client，全部落空 →「该视频没有可下载的清晰度」；refresh 失败静默、5s 内不重试同一 id；SPA 切视频后地址变化 → 新 id 走 stub + refresh 自愈；直播页不匹配（非 `/watch`、非 `/shorts`）；Shorts 见 M9.4
+- 测试要点：`tests/youtube.test.mjs`（id 解析、单文件/自适应/音频构建、容器优先（AV1 MP4 压过同档 VP9 WebM）、渐进档去重、排序、`ytParsePlayer` 元信息、`ytFetchPlayer` 请求体与 `VISIONOS → IOS → ANDROID_VR` 回退、`ytLoadVideo` 缓存/并发、`ytRefresh` 跳过已有档位）；真页 CDP：`watch?v=dQw4w9WgXcQ` 按钮挂载与菜单、2160p AV1+AAC 合并档实际落盘
 
 #### M9.2 列表卡片占位挂载与现取 🟢
 - **验收**：首页、搜索结果、播放页相关推荐中带视频 id 的卡片按钮**常显**（右上 8px，不依赖 hover），频道/播放列表等无视频 id 的卡片不注入；hover 触发预览后按钮仍可见、命中测试为按钮本身且可点开菜单；点按钮时先 toast「正在获取清晰度…」，InnerTube 返回后（≤3s）出菜单并列出该视频真实档位
@@ -586,7 +586,7 @@ flowchart TD
 - 数据结构：占位条目 `{ videoId, title, author: "", streams: [] }`；`ytPending: Map<id, Promise>`
 - 算法与规则：id 正则同时认 `[?&]v=([A-Za-z0-9_-]{11})` 与 `/shorts/([A-Za-z0-9_-]{11})`；标题依次取 `#video-title`、`yt-formatted-string#video-title`、`h3`、`.ytLockupMetadataViewModelTitle`，最后回退缩略图 `img[alt]`；`iconRight = 8`；`mount` 优先缩略图容器（`yt-thumbnail-view-model` / `#thumbnail`），回退 `self`；同一 id 并发只发一轮请求，成功后写 store，失败清 pending 允许重试。**按钮常显**：hover 预览由 YouTube 全局层 `#video-preview > ytd-video-preview`（`position:absolute`，`z-index:auto`）精确覆盖缩略图（实测覆盖区与缩略图同为 `528×297`），它不在卡片 DOM 内，指针进入后卡片与缩略图都不再 `:hover`；按钮的 `z-index:99999` 在根层叠上下文里高于该全局层，常显即可保持可见与可点
 - 错误与边界：卡片无视频 id（频道、播放列表、广告外链）→ `idFrom` null 不挂；不做 hover 预取（卡片多、InnerTube 易触发人机验证，按点击现取）；接口报错时 toast 具体原因；卡片标题缺失时菜单标题用接口返回的真实标题
-- 测试要点：`tests/youtube.test.mjs`（`ytCardVideoId` 多链接/无链接、Shorts 链接、`ytCardTitle` 选择器、`ytStub`、卡片锚点 `alwaysShow`）；真页 CDP：首页 23/23 卡片挂载、按钮常显、预览播放中按钮仍可点开菜单（含 IOS 回退）
+- 测试要点：`tests/youtube.test.mjs`（`ytCardVideoId` 多链接/无链接、Shorts 链接、`ytCardTitle` 选择器、`ytStub`、卡片锚点 `alwaysShow`）；真页 CDP：首页 23/23 卡片挂载、按钮常显、预览播放中按钮仍可点开菜单（VISIONOS 取流）
 
 #### M9.3 直链现取与分离流命名 🟢
 - **验收**：点选任一档后重新请求 `/youtubei/v1/player`，按 `label`（缺失时按 `itag`）取新直链；分离流发出的下载请求是 `googlevideo.com/videoplayback`（不带 Cookie、带 `Range: bytes=0-`），响应 `206`；合并档同时取画面与音频两路（`itag` 与 `audioItag`），落成一个 MP4；重新取链失败时退回菜单里的旧直链，仍无可用直链则 toast「该清晰度不可用」；文件名形如 `作者_标题_1080p.mp4`（合并）、`作者_标题_1080p 画面（无音轨）.mp4`（不兼容拆分）、`作者_标题_音频 130kbps.m4a`；大文件走 File System Access 落盘
@@ -596,7 +596,7 @@ flowchart TD
 - 数据流：`onPick` → `ytResolveDownload(item, stream)` → `ytFetchPlayer(item.videoId)` → `ytBuildStreams` → 按 label/itag 命中 → 合并档再按 `audioItag` 命中音轨 → `ytPickReachable` 分别探节点 → 返回 `MuxPlan` → `download(planPromise, { streamToDisk: true })` → 合并落盘
 - 接口：`ytResolveDownload(item, stream): Promise<DownloadPlan | MuxPlan>`；`ytFilename(item, stream): string`；`ytHostCandidates(url): string[]`；`ytPickReachable(url): Promise<string>`
 - 数据结构：`DownloadPlan { url, credentials: "omit", headers: { Range: "bytes=0-" }, filename }`；`MuxPlan { merge: "fmp4", parts: [画面, 音轨], filename }`；`Stream.itag` / `Stream.audioItag` 用于重取时定位同一编码档
-- 算法与规则：文件名 `[author, title, label].join("_")` → `sanitizeName` → 空白折叠 → 截 120 字符；`stream.kind === "audio"` 用 `.m4a`，其余 `.mp4`；直链 `http://` 统一升 `https://`；`IOS` 直链不带 `Range` 会直接 403（手机端只允许分段请求），`bytes=0-` 仍拿整份且 `Content-Length` 是总大小；googlevideo 每次下发的边缘节点不同，直链 `mn=` 参数列出候选节点 → 用同一个 `rrN---` 前缀逐个 `Range: bytes=0-0` 探测，取第一个 2xx 的节点（全部不通则用原链）；音轨重取直接取新数据里码率最高的 AAC，取不到才退回菜单里的旧 `audioUrl`
+- 算法与规则：文件名 `[author, title, label].join("_")` → `sanitizeName` → 空白折叠 → 截 120 字符；`stream.kind === "audio"` 用 `.m4a`，其余 `.mp4`；直链 `http://` 统一升 `https://`；移动端 client（`IOS` / `VISIONOS`）直链不带 `Range` 会直接 403（只允许分段请求），`bytes=0-` 仍拿整份且 `Content-Length` 是总大小；`ANDROID_VR` 直链在浏览器里普遍 CORS/403 拒绝，仅在前两个 client 均失败时才使用；googlevideo 每次下发的边缘节点不同，直链 `mn=` 参数列出候选节点 → 用同一个 `rrN---` 前缀逐个 `Range: bytes=0-0` 探测，取第一个 2xx 的节点（全部不通则用原链）；音轨重取直接取新数据里码率最高的 AAC，取不到才退回菜单里的旧 `audioUrl`
 - 错误与边界：InnerTube 重取失败/无匹配 → 退回 `stream.url`；两者皆无 →「该清晰度不可用」；googlevideo 非 2xx / 网络不可达 → kernel toast「下载失败：HTTP <status>」或「下载失败：TypeError: Failed to fetch」；合并档缺音轨 → 回落拆分下载仅画面档并提示；非分片 MP4 由 kernel 拒绝合并（M10.1）
 - 测试要点：`tests/youtube.test.mjs`（重取命中/未命中退回旧链/两路皆无报错、节点回退、Range 头、合并档 `MuxPlan` 两路、文件名与扩展名、http→https）；真页 CDP：合并档两条 googlevideo `206`、落盘单文件可播放；144p 的 Range 请求 `206`
 
@@ -646,16 +646,16 @@ flowchart TD
 - 测试要点：`tests/download.test.mjs`（双路合并落盘字节、两路进度、单路截断中止、picker 取消、临时清理、无 OPFS 内存回退） + 浏览器冒烟（真实保存对话框）
 
 #### M10.3 YouTube 合并档位 ✅
-- **验收**：普通视频菜单中，自适应档在同分辨率有 MP4 画面与 AAC 音轨时显示为单条 `Np`（不再拆「画面/音频」），点选后发出两条 `googlevideo` 请求（视频 itag + AAC itag），落成一个可播放 MP4；单文件 360p 仍为单条且不重复；画面只有 WebM/VP9 或没有 AAC 时该档仍显示 `Np 画面（无音轨）`；全部档位都能合并时不列独立音频，存在拆分画面档时才附一条 `音频 <kbps>kbps`；文件名 `作者_标题_1080p.mp4`
+- **验收**：普通视频菜单中，自适应档在同分辨率有 MP4 画面与 AAC 音轨时显示为单条 `Np`（不再拆「画面/音频」），同档 MP4 AV1 优先于 WebM VP9，1440p/2160p 的 AV1 MP4 与 AAC 合并成单条；点选后发出两条 `googlevideo` 请求（视频 itag + AAC itag），落成一个可播放 MP4；单文件 360p 仍为单条，且同档不再重复出现拆分的 360p 画面；画面只有 WebM/VP9 或没有 AAC 时该档仍显示 `Np 画面（无音轨）`；全部档位都能合并时不列独立音频，存在拆分画面档时才附一条 `音频 <kbps>kbps`；文件名 `作者_标题_1080p.mp4`
 - **依赖**：M9.1、M9.3、M10.2
 
 详细设计：
-- 数据流：`ytBuildStreams` 先选 AAC 音轨（`audio/mp4` 最高码率）→ 自适应画面按 `qualityLabel` 分组选最优 → 若最优是 `video/mp4` 且有 AAC → 输出 `{ label: qualityLabel, kind: "mux", itag, audioItag }`；否则输出原 `kind: "video"` 拆分条目 → 菜单 → 点选 → `ytResolveDownload` 重取后按 `itag` 与 `audioItag` 各取新链 → `MuxPlan`
+- 数据流：`ytBuildStreams` 先选 AAC 音轨（`audio/mp4` 最高码率）→ 自适应画面按 `qualityLabel` 分组，组内容器优先选最优 → 若最优是 `video/mp4` 且有 AAC → 输出 `{ label: qualityLabel, kind: "mux", itag, audioItag }`；否则输出原 `kind: "video"` 拆分条目 → 菜单 → 点选 → `ytResolveDownload` 重取后按 `itag` 与 `audioItag` 各取新链 → `MuxPlan`
 - 接口：`ytBuildStreams(data): Stream[]`；`ytResolveDownload(item, stream): Promise<DownloadPlan | MuxPlan>`；`ytFilename(item, stream)`
 - 数据结构：`Stream { label, url?, itag?, kind: "mux", audioItag }`；`MuxPlan.parts[0]` 带 `Range: bytes=0-`，`parts[1]` 同；两路 `credentials: "omit"`
-- 算法与规则：合并判定只看容器（`mimeType` 以 `video/mp4` 开头）与 AAC 是否存在；渐进单文件 `qualityLabel` 已占用时合并档不再重复；`itag` 重取命中优先于 `label`；音轨重取直接取新数据里码率最高的 AAC（与构建合并档时同一条，菜单里的 `audioItag` 仅作标识）；文件名扩展名 `.mp4`，label 不含「画面（无音轨）」后缀
+- 算法与规则：合并判定只看容器（`mimeType` 以 `video/mp4` 开头）与 AAC 是否存在；同档排序为 `video/mp4` + avc1 → `video/mp4` + av01 → MP4 其它 → WebM + vp9 → WebM + av01，确保 1440p/2160p 选到 AV1 MP4 而非同档 VP9；渐进单文件 `qualityLabel` 已占用时整档跳过（合并与拆分都不再重复）；`itag` 重取命中优先于 `label`；音轨重取直接取新数据里码率最高的 AAC（与构建合并档时同一条，菜单里的 `audioItag` 仅作标识）；文件名扩展名 `.mp4`，label 不含「画面（无音轨）」后缀
 - 错误与边界：视频或音轨任一重取失败 → 有旧链则用旧链；缺音轨 → 回落为仅画面拆分下载并提示；合并失败由 M10.2 统一提示；受限视频沿用 M9.1 文案
-- 测试要点：`tests/youtube.test.mjs`（MP4+AAC 出 `mux` 且带 `audioItag`、VP9 保留拆分、无 AAC 保留拆分、渐进档不重复、`ytResolveDownload` 两路 `MuxPlan`、文件名）；真页 CDP：1080p 合并档两条 `206` 与单文件落盘
+- 测试要点：`tests/youtube.test.mjs`（MP4+AAC 出 `mux` 且带 `audioItag`、同档 AV1 MP4 压过 VP9 WebM、VP9-only 保留拆分、无 AAC 保留拆分、渐进档整档去重、`ytResolveDownload` 两路 `MuxPlan`、文件名）；真页 CDP：2160p AV1 合并档两条 `206`、落盘单文件可播放
 
 #### M10.4 B站合并档位 ✅
 - **验收**：登录态 DASH 档在菜单中显示为单条 `高清 1080P`（不再拆「画面/音频」，也不另列音频档），点选后请求一次 `playurl` 拿两路 `baseUrl`、发出两条 CDN 请求，落成一个可播放 MP4；`dash.audio` 为空时保留「画面（无音轨）」拆分档；文件名 `作者_标题_高清 1080P.mp4`
@@ -731,3 +731,4 @@ flowchart TD
 | 2026-11-01 | 新增模块 | 新增 M10「音视频合并下载」及 M10.1–M10.4；§2.1 `Stream.kind` 增加 `'mux'` 与 `audioItag`，新增 `MuxPlan`；§2.2 `resolveDownload` 允许返回 `MuxPlan`；§3.2 新增 `kernel/merge.js`；关闭待定项 #3 | 用户要求下载不再分流。自写零依赖 fMP4 box 合并：实测 dist 72 841 B → 90 498 B（+17 657 B，+24.2%），其中合并器本体 10 297 B；mediabunny 仅 MP4 入口 min 后 405 559 B（gzip 104 412 B）、ffmpeg.wasm ~30 MB，均不适合单脚本。合并只做容器层搬箱，不转码 |
 | 2026-11-01 | 改验收 | M7.3 由「画面/音频两条分别下载」改为「单条合并档 + 音频单条」；M9.1 菜单增加「自适应画面 + AAC 合并档」；M9.3 增加两路 `MuxPlan` 与合并命名；prd 非目标同步 | 合并能力落地后，用户点一个清晰度应得到一个可直接播放的 MP4；不兼容组合仍保留拆分条目 |
 | 2026-11-01 | 改验收 | 可合并档位不再重复列独立音频：YouTube 仅在存在「画面（无音轨）」拆分档时列一条音频；B站去掉每个 DASH 档旁的「<档位> 音频」，`biliResolveDownload` 不再处理 `kind: "audio"`；M7.3/M7.4/M9.1/M9.3/M10.3/M10.4 与 prd 同步 | 用户要求：能合流的档位不必再列音频链接，只有不能合流的组合才分流显示 |
+| 2026-11-01 | 改详细设计 | M9 取流客户端顺序改为 `VISIONOS → IOS → ANDROID_VR`；M9.1/M9.3/M10.3 同分辨率改为容器优先（MP4 avc1 → MP4 av01 → MP4 其它 → WebM），1440p/2160p 以 AV1 MP4 + AAC 合并；渐进单文件已覆盖的档位整档跳过；prd 同步 | `ANDROID_VR` 直链在浏览器里普遍 CORS/403 拒绝（实测同视频 `VISIONOS` itag 401/140 均 `206`），必须换首选客户端；容器优先让高清档可合并，并消除同分辨率重复的「画面（无音轨）」条目 |

@@ -1,6 +1,6 @@
 {
   "name": "video-downloader",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "private": true,
   "type": "module",
   "description": "页面附着的视频下载底座（Tampermonkey 单文件产物）",

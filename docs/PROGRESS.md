@@ -34,6 +34,24 @@
 | M10.3 | ✅ | 批次 8 |
 | M10.4 | ✅ | 批次 8 |
 
+## v0.14.2 ✅ {spec §M9.1/M9.3/M10.3 · VISIONOS 取流 + 容器优先选流}
+- 缺陷 / 需求（用户反馈）：
+  - 1080p 以上出现「Np 画面（无音轨）」+ 独立音频，1440p/2160p 明明有 AV1 MP4 却选成 VP9 WebM 而无法合并
+  - 同分辨率已有单文件 360p，菜单里又出现一条「360p 画面（无音轨）」
+  - 真页实测 `ANDROID_VR` 直链在浏览器内普遍 `Failed to fetch`（同视频 itag 18/137/248/401/140 全挂；`no-cors` 可过 → CORS/403），既有下载链路实际不可用
+- 调研：yt-dlp 默认客户端为 `tv_samsung/visionos/web`（jsl 关闭时仅 `visionos`），编码偏好 AV1 居前；xYTDownloader 用 `VISIONOS` + 容器优先 + AV1 MP4 4K 合并；Cobalt 用 `IOS` + `WEB_EMBEDDED`。实测同视频 `VISIONOS` itag 401 / 140 均 `206`
+- 实现：
+  - [src/platforms/youtube/adapter.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/adapter.js)：`YT_CLIENTS` 改为 `VISIONOS → IOS → ANDROID_VR`；`ytCodecRank` 改容器优先（MP4 avc1 → MP4 av01 → MP4 其它 → WebM vp9 → WebM av01）；`ytBuildStreams` 对单文件已覆盖的分辨率整档跳过，不再生成重复的「画面（无音轨）」
+  - [tests/youtube.test.mjs](file:///E:/work/ai/video-downloader/tests/youtube.test.mjs)：夹具补 1440p WebM VP9 与自适应 360p，断言 AV1 MP4 胜出、360p 不重复；客户端断言改为 VISIONOS 并新增三级兜底用例；并发失败调用数 3 → 4
+- 单测：`npm test` **118 pass / 0 fail**
+- 真页收点（CDP 注入 0.14.2，`watch?v=dQw4w9WgXcQ` 4K Remaster）：
+  - 菜单 8 档：`2160p / 1440p / 1080p / 720p / 480p / 360p / 240p / 144p`，全部单条；无「画面（无音轨）」、无独立音频
+  - 2160p 实际下载：画面 itag **401（AV1）** encoded 240 334 642 B、音频 itag **140（AAC）** encoded 3 449 447 B；两路 `Range: bytes=0-` 预探均 `206`（encoded 1 B）
+  - 落盘：OPFS 输出 **243 783 067 B**；顶层盒 `ftyp + moov(1157) + moof + mdat`；`moov` 1 个、`trak` 2、`av01`/`mp4a` 均在
+  - 可播放：`duration 213.089524s`、`3840×2160`、`readyState 4`；`play()` 后 `currentTime 1.085s`、`paused:false`
+  - 清理：完成后 OPFS 仅剩验证输出，`dl-merge-*` 无残留（测试前手动清掉了旧版本遗留的 2 个临时文件）
+- 构建：`npm run build` → `dist/douyin.user.js` **90 743 B**（0.14.1 90 330 B，+413 B），`node --check` 通过，`@version 0.14.2`，sha256 `b5a411fec994dc1d63e070dfc73bbb625a677020cf9cc5efb089bcd71fac2840`
+
 ## v0.14.1 ✅ {spec §M7.3/M9.1/M9.3/M10.3/M10.4 · 可合并档位不再列独立音频}
 - 需求（用户反馈）：能合流的档位不必再列音频链接，只有不能合流的组合才分流显示
 - 文档：prd M7/M9 说明；spec M7.3/M7.4/M9.1/M9.3/M10.3/M10.4 验收与算法；README 的 B站 / YouTube 说明；spec 调整记录追加 2026-11-01「改验收」
