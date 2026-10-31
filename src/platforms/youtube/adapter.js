@@ -1,0 +1,316 @@
+import { ytCardTitle, ytCurrentVideoId, ytPageTitle, ytRules } from "./rules.js";
+import { sanitizeName, sortStreams } from "../../kernel/extract.js";
+
+const YT_PLAYER = "https://www.youtube.com/youtubei/v1/player";
+// ytcfg 取不到时兜底（公开网页端 key，多年未变）
+const YT_FALLBACK_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+// 网页端自身只给 SABR（无逐档直链），逐档直链要走移动端 client。
+// ANDROID_VR 有 progressive（单文件带音轨），但音乐厂牌等版权方视频会回
+// LOGIN_REQUIRED /「Sign in to confirm you're not a bot」；IOS 对这些视频仍给
+// adaptive 直链（1080p avc1 + AAC），所以按顺序兜底。
+const YT_CLIENTS = [
+  {
+    clientName: "ANDROID_VR",
+    clientVersion: "1.62.27",
+    androidSdkVersion: 32,
+    osName: "Android",
+    osVersion: "12",
+    deviceMake: "Oculus",
+    deviceModel: "Quest 3",
+    hl: "en",
+    gl: "US",
+  },
+  {
+    clientName: "IOS",
+    clientVersion: "20.10.4",
+    deviceModel: "iPhone16,2",
+    osName: "iPhone",
+    osVersion: "18.3.2.22D82",
+    hl: "en",
+    gl: "US",
+  },
+];
+
+export function ytApiKey() {
+  try {
+    const cfg = globalThis.ytcfg;
+    const key = cfg && typeof cfg.get === "function" ? cfg.get("INNERTUBE_API_KEY") : "";
+    if (key) return key;
+  } catch (e) {}
+  return YT_FALLBACK_KEY;
+}
+
+export function ytPlayerBody(videoId, client = YT_CLIENTS[0]) {
+  return {
+    context: { client },
+    videoId,
+    contentCheckOk: true,
+    racyCheckOk: true,
+  };
+}
+
+// googlevideo 直链有时是 http，https 页面上会被混合内容拦截
+function ytHttps(url) {
+  return String(url || "").replace(/^http:\/\//, "https://");
+}
+
+// 同分辨率优先 H.264（浏览器与后续封装最稳），再比码率
+function ytCodecRank(mime) {
+  if (/avc1/i.test(mime)) return 0;
+  if (/vp0?9/i.test(mime)) return 1;
+  return 2;
+}
+
+function ytBetter(a, b) {
+  const d = ytCodecRank(a.mimeType) - ytCodecRank(b.mimeType);
+  if (d !== 0) return d < 0;
+  return (Number(a.bitrate) || 0) > (Number(b.bitrate) || 0);
+}
+
+function ytIsVideo(f) {
+  return /^video\//.test(String((f && f.mimeType) || ""));
+}
+
+function ytIsAudio(f) {
+  return /^audio\//.test(String((f && f.mimeType) || ""));
+}
+
+export function ytBuildStreams(data) {
+  const sd = (data && data.streamingData) || {};
+  const formats = Array.isArray(sd.formats) ? sd.formats : [];
+  const adaptive = Array.isArray(sd.adaptiveFormats) ? sd.adaptiveFormats : [];
+  const out = [];
+  const seen = new Set();
+
+  // 单文件（带音轨）：直接按 qualityLabel 入列
+  for (const f of formats) {
+    if (!f || !f.url || !ytIsVideo(f)) continue;
+    const label = String(f.qualityLabel || "");
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    out.push({ label, url: ytHttps(f.url), itag: Number(f.itag) });
+  }
+
+  // 自适应画面：同 label 取编码/码率最优的一条
+  const groups = new Map();
+  for (const f of adaptive) {
+    if (!f || !f.url || !ytIsVideo(f)) continue;
+    const label = String(f.qualityLabel || "");
+    if (!label) continue;
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(f);
+  }
+  for (const [quality, list] of groups) {
+    const best = list.reduce((a, b) => (ytBetter(b, a) ? b : a), list[0]);
+    const label = quality + " 画面（无音轨）";
+    if (seen.has(label)) continue;
+    seen.add(label);
+    out.push({ label, url: ytHttps(best.url), itag: Number(best.itag), kind: "video" });
+  }
+
+  // 音轨只取 AAC/m4a 里码率最高的一条；opus 留到后续支持 webm 封装时再说
+  const audios = adaptive.filter((f) => f && f.url && ytIsAudio(f) && /audio\/mp4/i.test(f.mimeType));
+  if (audios.length) {
+    const best = audios.reduce(
+      (a, b) => ((Number(b.bitrate) || 0) > (Number(a.bitrate) || 0) ? b : a),
+      audios[0]
+    );
+    const kbps = Math.round((Number(best.bitrate) || 0) / 1000);
+    out.push({
+      label: "音频 " + (kbps ? kbps + "kbps" : ""),
+      url: ytHttps(best.url),
+      itag: Number(best.itag),
+      kind: "audio",
+    });
+  }
+
+  return sortStreams(out);
+}
+
+function ytStatusText(status) {
+  const reason = (status && status.reason) || "";
+  // 匿名 InnerTube 被风控时同样报 LOGIN_REQUIRED，但用户登录了也没用，得先在页面里过一次
+  if (/not a bot/i.test(reason)) return "YouTube 要求人机验证，请先在浏览器打开该视频后再试";
+  if (status && status.status === "LOGIN_REQUIRED") return "该视频需要登录或年龄验证";
+  return reason || "该视频不可下载";
+}
+
+export function ytParsePlayer(data, videoId) {
+  if (!data) return null;
+  const status = data.playabilityStatus || {};
+  if (status.status && status.status !== "OK") return null;
+  const streams = ytBuildStreams(data);
+  if (!streams.length) return null;
+  const details = data.videoDetails || {};
+  return {
+    videoId: String(details.videoId || videoId || ""),
+    title: details.title || "",
+    author: details.author || "",
+    streams,
+  };
+}
+
+async function ytPlayerOnce(videoId, client) {
+  const resp = await fetch(YT_PLAYER + "?key=" + encodeURIComponent(ytApiKey()) + "&prettyPrint=false", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(ytPlayerBody(videoId, client)),
+  });
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const json = await resp.json();
+  const status = (json && json.playabilityStatus) || {};
+  if (status.status && status.status !== "OK") throw new Error(ytStatusText(status));
+  const data = (json && json.streamingData) || {};
+  if (!(data.formats || []).length && !(data.adaptiveFormats || []).length) {
+    throw new Error("该视频没有可下载的清晰度");
+  }
+  return json;
+}
+
+export async function ytFetchPlayer(videoId) {
+  let lastErr = null;
+  for (const client of YT_CLIENTS) {
+    try {
+      return await ytPlayerOnce(videoId, client);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("该视频不可下载");
+}
+
+// 同一 id 的并发查询合并成一个 Promise；成功后 store 缓存，失败后允许重试
+const ytPending = new Map();
+
+export async function ytLoadVideo(videoId, store) {
+  const id = String(videoId || "");
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) throw new Error("缺少视频 id");
+  const cached = store && store.get(id);
+  if (cached && cached.streams && cached.streams.length) return cached;
+  if (ytPending.has(id)) return ytPending.get(id);
+  const task = (async () => {
+    const data = await ytFetchPlayer(id);
+    const item = ytParsePlayer(data, id);
+    if (!item) throw new Error("该视频暂无可下载清晰度");
+    if (store) store.upsert(item);
+    return item;
+  })();
+  ytPending.set(id, task);
+  try {
+    return await task;
+  } finally {
+    ytPending.delete(id);
+  }
+}
+
+export function ytStub(videoId, el, rule) {
+  const id = String(videoId || "");
+  if (!id) return null;
+  const isDetail = !!(rule && rule.kind === "detail");
+  return {
+    videoId: id,
+    title: isDetail ? ytPageTitle() : ytCardTitle(el),
+    author: "",
+    streams: [],
+  };
+}
+
+let ytFetching = false;
+let ytLastId = "";
+let ytLastAt = 0;
+
+// 播放页档位不在 DOM 里，InnerTube 每 2s 轮询时补一次；失败 5s 内不重试同一 id
+export async function ytRefresh(store) {
+  const id = ytCurrentVideoId();
+  if (!id) return;
+  const cached = store.get(id);
+  if (cached && cached.streams && cached.streams.length) return;
+  if (ytFetching) return;
+  const now = Date.now();
+  if (id === ytLastId && now - ytLastAt < 5000) return;
+  ytFetching = true;
+  ytLastId = id;
+  ytLastAt = now;
+  try {
+    await ytLoadVideo(id, store);
+  } catch (e) {
+  } finally {
+    ytFetching = false;
+  }
+}
+
+export function ytFilename(item, stream) {
+  const name = sanitizeName([item.author, item.title, stream.label].filter(Boolean).join("_")).replace(/\s+/g, " ");
+  const ext = stream.kind === "audio" ? ".m4a" : ".mp4";
+  return name.slice(0, 120) + ext;
+}
+
+// googlevideo 每次下发的边缘节点不同，个别节点在部分网络下连不上（Failed to fetch / 403）。
+// 直链自带 mn=节点列表，用同一个 rrN 前缀换节点探一遍，能救回大部分节点不可达的下载。
+function ytHostCandidates(url) {
+  const u = new URL(url);
+  const prefix = (u.host.match(/^(rr\d+---)/) || ["rr1---"])[0];
+  const out = [url];
+  for (const node of (u.searchParams.get("mn") || "").split(",")) {
+    if (!node) continue;
+    const cand = url.replace(u.host, prefix + node + ".googlevideo.com");
+    if (!out.includes(cand)) out.push(cand);
+  }
+  return out;
+}
+
+async function ytPickReachable(url) {
+  for (const cand of ytHostCandidates(url)) {
+    try {
+      const resp = await fetch(cand, { headers: { Range: "bytes=0-0" }, credentials: "omit" });
+      if (resp.ok) return cand;
+    } catch (e) {}
+  }
+  return url;
+}
+
+// 直链带 expire/签名字段，点下载时按同 id 重取；label 优先、itag 次之，都没有退回菜单旧链
+export async function ytResolveDownload(item, stream) {
+  let fresh = [];
+  try {
+    fresh = ytBuildStreams(await ytFetchPlayer(item.videoId));
+  } catch (e) {}
+  const hit =
+    fresh.find((s) => s.label === stream.label) ||
+    (stream.itag ? fresh.find((s) => s.itag === stream.itag) : null);
+  const url = (hit && hit.url) || stream.url;
+  if (!url) throw new Error("该清晰度不可用");
+  // IOS client 下发的直链不带 Range 会直接 403（手机端只允许分段请求）；
+  // bytes=0- 照样拿到整份，Content-Length 仍是总大小
+  return {
+    url: await ytPickReachable(url),
+    credentials: "omit",
+    headers: { Range: "bytes=0-" },
+    filename: ytFilename(item, stream),
+  };
+}
+
+export function ytParse(raw) {
+  if (!raw) return null;
+  return ytParsePlayer(raw, raw.videoDetails && raw.videoDetails.videoId);
+}
+
+export function ytNormalizeStreams(raw) {
+  return ytBuildStreams(raw);
+}
+
+export const youtubeAdapter = {
+  ...ytRules,
+  sources: [],
+  domSources: [],
+  parse: ytParse,
+  normalizeStreams: ytNormalizeStreams,
+  resolveDownload: ytResolveDownload,
+  filename: ytFilename,
+  refresh: ytRefresh,
+  stub: ytStub,
+  loadItem: ytLoadVideo,
+  // 4K 单档可达数百 MB，blob 整份驻留内存不可用；落盘走 File System Access
+  streamToDisk: true,
+};

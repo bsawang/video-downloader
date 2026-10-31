@@ -5,6 +5,7 @@ import path from "node:path";
 import { douyinAdapter } from "../src/platforms/douyin/adapter.js";
 import { bilibiliAdapter } from "../src/platforms/bilibili/adapter.js";
 import { xiaohongshuAdapter } from "../src/platforms/xiaohongshu/adapter.js";
+import { youtubeAdapter } from "../src/platforms/youtube/adapter.js";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -27,6 +28,8 @@ const ORDER = [
   "platforms/bilibili/adapter.js",
   "platforms/xiaohongshu/rules.js",
   "platforms/xiaohongshu/adapter.js",
+  "platforms/youtube/rules.js",
+  "platforms/youtube/adapter.js",
   "entry/tm.js",
 ];
 
@@ -63,7 +66,12 @@ export function build() {
   }
 
   const matches = [
-    ...new Set([...douyinAdapter.matches, ...bilibiliAdapter.matches, ...xiaohongshuAdapter.matches]),
+    ...new Set([
+      ...douyinAdapter.matches,
+      ...bilibiliAdapter.matches,
+      ...xiaohongshuAdapter.matches,
+      ...youtubeAdapter.matches,
+    ]),
   ];
   const matchLines = matches.map((m) => `// @match        ${m}`).join("\n");
   const header = [
@@ -71,7 +79,7 @@ export function build() {
     "// @name         短视频下载器",
     "// @namespace    https://github.com/bsawang/video-downloader",
     `// @version      ${pkg.version}`,
-    "// @description  页面附着的视频下载（抖音/B站/小红书，无后端）",
+    "// @description  页面附着的视频下载（抖音/B站/小红书/YouTube，无后端）",
     `// @updateURL    ${UPDATE_URL}`,
     `// @downloadURL  ${UPDATE_URL}`,
     matchLines,

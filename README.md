@@ -1,8 +1,8 @@
 # 短视频下载器
 
-抖音、B站视频**无水印下载**浏览器插件（无后端，页面内直接下载）。
+抖音、B站、小红书、YouTube 视频**无水印下载**浏览器插件（无后端，页面内直接下载）。
 
-覆盖抖音首页 / 频道栏目 / 搜索结果（多列 + 单列大视频流）/ 视频详情页 / **个人主页（作品/喜欢/收藏三 tab）**，以及 **B站首页 / 热门 / 排行 / 搜索结果 / 视频详情页（含多分P与右侧推荐位）**，全站统一"视频上 hover 出下载按钮 → 弹清晰度菜单 → 下载"。
+覆盖抖音首页 / 频道栏目 / 搜索结果（多列 + 单列大视频流）/ 视频详情页 / **个人主页（作品/喜欢/收藏三 tab）**，**B站首页 / 热门 / 排行 / 搜索结果 / 视频详情页（含多分P与右侧推荐位）**，小红书发现页 / 笔记详情（含弹层），以及 **YouTube 播放页 / 首页 / 搜索结果 / 相关推荐**，全站统一"视频上 hover 出下载按钮 → 弹清晰度菜单 → 下载"。
 
 ## 支持方式与平台
 
@@ -19,8 +19,8 @@
 |---|---|---|
 | **抖音** | ✅ 支持 | 首页 / 搜索 / 详情 / 个人主页 / 作者作品列表 |
 | **B站** | ✅ 支持 | 首页 / 热门 / 排行 / 搜索 / 详情页（含多分P、右侧推荐位） |
-| 小红书 | ⏳ 规划 | — |
-| YouTube | ⏳ 规划 | — |
+| **小红书** | ✅ 支持 | 发现页卡片 / 笔记详情（含播放弹层、`/red_video` 栏目） |
+| **YouTube** | ✅ 支持 | 播放页 / 首页 / 搜索结果 / 相关推荐 |
 
 **环境要求**（extension 版）：
 
@@ -52,13 +52,13 @@ git clone https://github.com/bsawang/video-downloader.git
 
 ## Tampermonkey 版（阶段 0，重构中）
 
-单文件 Tampermonkey 用户脚本（`@grant none`），行为与 extension 0.5.3 等价，现已覆盖抖音全站与 B站卡片页/详情页。
+单文件 Tampermonkey 用户脚本（`@grant none`），行为与 extension 0.5.3 等价，现已覆盖抖音全站、B站卡片页/详情页、小红书发现页/笔记详情与 YouTube 播放页/列表卡片。
 
 安装（推荐，装完自动更新）：
 
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/)，Chrome 138+ 需在扩展页开启**允许用户脚本**
 2. 浏览器打开 [releases/latest/download/douyin.user.js](https://github.com/bsawang/video-downloader/releases/latest/download/douyin.user.js) → TM 弹出安装页 → 安装
-3. 打开抖音或 B站视频页，交互一致
+3. 打开抖音、B站、小红书或 YouTube 视频页，交互一致
 
 脚本头带 `@updateURL`/`@downloadURL`（同指上面的固定链接），TM 会在后台按设置周期检查更新；也可在 TM 面板点「检查用户脚本更新」立即拉取。**通过本地文件安装或拖入安装的脚本没有更新源，需要改从上面的链接安装一次。**
 
@@ -71,7 +71,7 @@ npm test          # node --test，含 legacy oracle 等价用例
 
 发版（让使用者的 TM 自动更新到新版本）：`npm run build` 后新建 release，把 `dist/douyin.user.js` 作为**同名资产**上传——脚本头的 URL 是 `releases/latest/download/douyin.user.js` 固定别名，不需要改动。
 
-> 平台差异集中在 `src/platforms/<平台>/`（当前抖音、B站），通用能力在 `src/kernel/`；设计见 [docs/spec.md](./docs/spec.md)。
+> 平台差异集中在 `src/platforms/<平台>/`（当前抖音、B站、小红书、YouTube），通用能力在 `src/kernel/`；设计见 [docs/spec.md](./docs/spec.md)。
 
 ## 使用
 
@@ -89,6 +89,15 @@ npm test          # node --test，含 legacy oracle 等价用例
 - **多分P**：切换分P后按钮菜单会自动跟随，文件名带 `P<n> <分P名>`。
 - **卡片页（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）**：卡片上 hover 出 ⬇，按钮让开右上角的「稍后再看」。首次悬停会预取该视频信息与档位，通常点开即出菜单；未预取就点是现取，需等 1s 左右（toast 提示「正在获取清晰度…」）。卡片页拿不到分P信息，**多分P视频默认只下 P1**；广告卡（无 BV 链接）不注入。
 - **长视频保存**：点选清晰度后会先弹浏览器**保存对话框**（File System Access），文件边下边写盘；取消对话框即取消下载。不支持该 API 的浏览器会回落到内存下载，超长视频可能失败。
+
+### YouTube 说明
+
+- **档位来源**：页面内联的播放器数据已只下发 SABR（没有逐档直链），菜单里的档位是打开页面后由脚本调用同源 `youtubei/v1/player` 现取的：`ANDROID_VR` 优先，被风控（提示「Sign in to confirm you're not a bot」）时自动换 `IOS` 重试。
+- **档位形态**：单文件 `360p`（含音轨）来自 `ANDROID_VR`；`720p` 及以上是自适应画面流，菜单里标「画面（无音轨）」，另有一条 `音频 <kbps>kbps`（AAC `.m4a`），需要自行用 ffmpeg 等工具合并。同分辨率优先 H.264。
+- **版权限制**：部分音乐 / MV 类视频只对登录态客户端开放，脚本会提示「该视频需要登录或年龄验证」或「YouTube 要求人机验证，请先在浏览器打开该视频后再试」。
+- **下载链路**：点选时按当前视频重取新直链（带 `Range: bytes=0-`，`googlevideo` 返回 206），并在直链自带的候选节点（`mn`）里探一个可达的再下载；个别 CDN 节点在部分网络下连不上时，重试一次通常会换到可用节点。
+- **保存方式**：点选后先弹浏览器**保存对话框**（File System Access），边下边写盘；4K 单档可达数百 MB，不会整份驻留内存。
+- **卡片**：首页 / 搜索 / 相关推荐里带 `/watch?v=` 的卡片 hover 出 ⬇；频道、播放列表等非视频卡片不注入。卡片页不做 hover 预取，点开时先提示「正在获取清晰度…」再出菜单。
 
 详细说明见 [extension/README.md](extension/README.md)。
 

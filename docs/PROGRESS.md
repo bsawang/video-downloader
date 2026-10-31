@@ -25,6 +25,32 @@
 | M8.1 | ✅ | 批次 5 |
 | M8.2 | ✅ | 批次 5 |
 | M8.3 | ✅ | 批次 5 |
+| M9.1 | ✅ | 批次 6 |
+| M9.2 | ✅ | 批次 6 |
+| M9.3 | ✅ | 批次 6 |
+
+## v0.12.0 ✅ {spec §M9 · YouTube 平台接入}
+- 调研（CDP 运行态 + InnerTube 实测）：
+  - 播放页内联 `ytInitialPlayerResponse` 只有 SABR 信息，没有逐档直链
+  - 同源 `POST https://www.youtube.com/youtubei/v1/player?key=<ytcfg INNERTUBE_API_KEY>&prettyPrint=false`（`credentials: include`）可取 `formats/adaptiveFormats`
+  - `ANDROID_VR`（1.62.27 / Android 32）给 progressive 360p + adaptive + AAC；受限视频返回 `LOGIN_REQUIRED` 或 `Sign in to confirm you're not a bot`
+  - 回退 `IOS`（20.10.4）返回 `OK`，37 条 adaptive（1080p avc1 + AAC），无 progressive
+  - googlevideo 直链：IOS 来源不带 `Range` 直接 GET 是 403，带 `Range: bytes=0-` 为 206（`Content-Length` 为全长）；单条响应里的边节点可达性不定，`mn=` 给出同 `rrN---` 前缀的备用节点
+  - 新版首页/相关推荐卡片是 `yt-lockup-view-model`；搜索页仍 `ytd-video-renderer`；旧相关推荐 `ytd-compact-video-renderer`；播放器 `#movie_player`
+- 改动：
+  - 新增 [src/platforms/youtube/rules.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/rules.js)：视频 ID / 卡片标题提取，详情锚点（`#movie_player`，`top:12 right:12`，`pageScope: ^/watch`）+ 四种卡片锚点
+  - 新增 [src/platforms/youtube/adapter.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/adapter.js)：`YT_CLIENTS`（VR → IOS）取播放数据、`ytBuildStreams` 分 progressive/画面/音频并排序、`ytResolveDownload` 现取直链 + `ytPickReachable` 节点探测 + `Range: bytes=0-`、`ytFilename`/`ytStub`/`ytRefresh`/`ytLoadVideo`
+  - [src/entry/tm.js:5](file:///E:/work/ai/video-downloader/src/entry/tm.js#L5) 与 [tools/build.mjs](file:///E:/work/ai/video-downloader/tools/build.mjs) 接入第四份适配（`ORDER` / `matches` 并集 / `@description`）
+  - 新增 `tests/youtube.test.mjs` 21 例
+  - 文档：prd M9 客户端口径、spec M9.1–M9.3 详细设计、README 新增「YouTube 说明」
+  - 版本 0.11.5 → **0.12.0**（新增模块 M9）
+- 单测：`npm test` **99 pass / 0 fail**
+- 真页收点（CDP 注入 0.12.0）：
+  - 播放页：21 个锚点全挂（1 详情 + 20 相关），详情按钮 78.7×40 @ `#movie_player` 右上 12px，菜单 **10 档**（progressive + 画面/音频分离流）
+  - 首页：23/23 `yt-lockup-view-model` 卡片全挂，卡片按钮在缩略图内 8px；点 Minimax 卡片 → IOS 兜底约 **1.0 s** 出 **9 档**菜单
+  - 下载：144p 完整落盘 **2 058 142 B / 54 writes**，toast `✓ 下载完成`；720p 传输至 5.2 MiB（随后网络中断，与页面自身播放器同时卡缓冲）；更早构建 1080p 完整 **80 911 999 B**（77.2 MiB / 4 638 writes）
+  - 受限视频：不再静默失败，提示「YouTube 要求人机验证，请先在浏览器打开该视频后再试」；`LOGIN_REQUIRED` 单独提示
+- 构建：`npm run build` → `dist/douyin.user.js` **68 543 B**，`@version 0.12.0`，sha256 `a3cd23b98e86a05c6b0e77437f29cc90d71c364a965dd1c434e07c08be8ea570`
 
 ## 快道 v0.11.5 ✅ {spec §7 · /red_video 栏目笔记不挂按钮}
 - 缺陷（用户反馈）：首页正常，`https://www.xiaohongshu.com/red_video` 栏目仍有问题——从该栏目点开卡片后，播放弹层里没有下载按钮

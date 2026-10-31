@@ -28,10 +28,10 @@ VideoItem = {
   fallback?: boolean,         // perf 兜底构造的条目（不进 store，仅本次渲染）
   [extra: string]: unknown    // 平台附加字段（如 B站 bvid/cid/page/pageCount/part），kernel 不读
 }
-Stream = { label: string, url?: string, qn?: number, kind?: 'video' | 'audio' }
+Stream = { label: string, url?: string, qn?: number, itag?: number, kind?: 'video' | 'audio' }
 // label 如 "1080p" / "1080P"；url 为带签名的直链，能预取到时才填；
-// B站长视频直链会过期，只记平台档位码 qn，点下载时由 adapter.resolveDownload 现取；
-// kind 标记 DASH 分离流（画面/音频各一条），缺省为可直接播放的单文件流
+// 直链会过期的平台只记平台档位码（B站 qn / YouTube itag），点下载时由 adapter.resolveDownload 现取；
+// kind 标记分离流（画面/音频各一条），缺省为可直接播放的单文件流
 DownloadPlan = { url: string, credentials: 'omit' | 'include', headers?: Record<string,string>, filename?: string }
 ```
 
@@ -534,9 +534,53 @@ flowchart TD
 - 错误与边界：签名直链有时效 → 点选时重取，取不到用菜单旧链；两路都没有 → 「该清晰度不可用」；CDN 非 2xx → kernel toast「下载失败：HTTP <status>」；大文件整份进内存（小红书短视频，不做落盘分块）
 - 测试要点：`tests/xiaohongshu.test.mjs`（重取新链/退回旧链/两路皆无报错、http→https、文件名）；真页 CDP：卡片 `1080p` 点选后请求 `https://sns-video-v4.xhscdn.com/...sign=...` 传输 139,056,187 B；直链 Range 校验 `206 / video/mp4 / ftyp`
 
+### M9 平台接入（YouTube）🟢
+模块概要：
+- 职责：YouTube 播放页与列表卡片的识别、档位获取、直链解析、下载命名，全部差异留在本模块
+- 输入：页面地址 `watch?v=<11位id>` / 卡片 DOM（`yt-lockup-view-model`、`ytd-video-renderer`、`ytd-compact-video-renderer` 内的 `/watch?v=` 链接）/ 同源 `youtubei/v1/player`（`ANDROID_VR` 客户端，失败回退 `IOS`）
+- 输出：`youtubeAdapter`（`PlatformAdapter`）
+- 依赖：M1、M2、M3（契约）
+- 被谁依赖：M6
+
+#### M9.1 播放页识别与清晰度 🟢
+- **验收**：打开 `https://www.youtube.com/watch?v=<11位id>` 后，播放器右上 12px 处出现 **⬇ 下载**；菜单按清晰度降序列出 `Np`（单文件含音轨）、`Np 画面（无音轨）`（自适应）与 `音频 <kbps>kbps`，与 `youtubei/v1/player` 返回的 `formats/adaptiveFormats` 一致；同分辨率优先 H.264；页面无 pageerror
+- **依赖**：M1.2、M2.1、M3.1
+
+详细设计：
+- 数据流：entry 按 `matches` 选中 `youtubeAdapter` → `start()` → 500ms / 每 2000ms `refresh` → `ytRefresh` 从地址栏取 `v=` → 已有档位跳过，否则 `ytLoadVideo` 请求 InnerTube → `ytParsePlayer` 转条目 → `store.upsert` → `renderAll` 用 `#movie_player` 规则（`idFrom` 读地址栏 id）→ 挂 `self`，`pos = { top: 12, right: 12 }`
+- 接口：`ytVideoIdFromUrl(href): string|null`；`ytCurrentVideoId(loc?): string|null`；`ytApiKey(): string`；`ytPlayerBody(videoId, client?)`；`ytFetchPlayer(videoId): Promise<object>`；`ytBuildStreams(data): Stream[]`；`ytParsePlayer(data, videoId?): VideoItem|null`；`ytLoadVideo(videoId, store): Promise<VideoItem>`；`ytRefresh(store): Promise<void>`；`ytStub(videoId, el, rule)`
+- 数据结构：`Stream { label, url, itag, kind? }`（`kind` 缺省为单文件、`video`/`audio` 为分离流）；`VideoItem { videoId, title: videoDetails.title, author: videoDetails.author, streams }`；`ytPending: Map<id, Promise>` 并发去重；`YT_CLIENTS` 依次为 `{ clientName: "ANDROID_VR", clientVersion: "1.62.27", androidSdkVersion: 32, osName: "Android", osVersion: "12", deviceMake: "Oculus", deviceModel: "Quest 3", hl: "en", gl: "US" }` 与 `{ clientName: "IOS", clientVersion: "20.10.4", deviceModel: "iPhone16,2", osName: "iPhone", osVersion: "18.3.2.22D82", hl: "en", gl: "US" }`
+- 算法与规则：API key 取 `ytcfg.get("INNERTUBE_API_KEY")`，取不到用固定 key 兜底；`formats` 中 `mimeType` 以 `video/` 开头且有 `url` 的按 `qualityLabel` 入列（单文件含音轨，label 即 `qualityLabel`）；`adaptiveFormats` 中视频按 `qualityLabel` 分组，组内按「avc1 → vp9 → 其他」再比 `bitrate` 取最优，label 为 `qualityLabel + " 画面（无音轨）"`；音频只取 `audio/mp4`（AAC）中 `bitrate` 最高一条，label 为 `音频 <round(bitrate/1000)>kbps`；全部经 `sortStreams` 降序；`ANDROID_VR` 有 progressive（单文件带音轨），音乐厂牌等版权方视频会回 `LOGIN_REQUIRED`（`reason` 含「not a bot」），此时换 `IOS` 重试——`IOS` 对这些视频仍给 adaptive 直链（1080p 仍是 avc1 + AAC），但没有单文件档；播放页 `stub` 先挂占位按钮，标题取页面标题去掉 ` - YouTube` 后缀
+- 错误与边界：`playabilityStatus.status !== "OK"` 且两个 client 都失败 → 抛错：`reason` 含「not a bot」→「YouTube 要求人机验证，请先在浏览器打开该视频后再试」，`LOGIN_REQUIRED` →「该视频需要登录或年龄验证」，其余用 `reason`；非 2xx → `HTTP <status>`；OK 但无任何 `formats/adaptiveFormats` → 换下一个 client，全部落空 →「该视频没有可下载的清晰度」；refresh 失败静默、5s 内不重试同一 id；SPA 切视频后地址变化 → 新 id 走 stub + refresh 自愈；Shorts/直播页不匹配（非 `/watch`）
+- 测试要点：`tests/youtube.test.mjs`（id 解析、单文件/自适应/音频构建、AVC 优先、排序、`ytParsePlayer` 元信息、`ytFetchPlayer` 请求体/风控回退、`ytLoadVideo` 缓存/并发、`ytRefresh` 跳过已有档位）；真页 CDP：`watch?v=dQw4w9WgXcQ` 按钮挂载与 10 档菜单、1080p 实际传输 77.2 MiB
+
+#### M9.2 列表卡片占位挂载与现取 🟢
+- **验收**：首页、搜索结果、播放页相关推荐中带 `/watch?v=` 的卡片 hover 出 ⬇（右上 8px），频道/播放列表等无视频 id 的卡片不注入；点按钮时先 toast「正在获取清晰度…」，InnerTube 返回后（≤3s）出菜单并列出该视频真实档位
+- **依赖**：M1.2、M3.1、M3.2
+
+详细设计：
+- 数据流：`scan` 命中 `yt-lockup-view-model` / `ytd-video-renderer` / `ytd-compact-video-renderer` → `ytCardVideoId` 从内部 `a[href*="/watch?v="]` 取 11 位 id → `ytStub` 取卡片标题 → 立即挂按钮 → 点击走 kernel `onOpen` → `ytLoadVideo` 请求 InnerTube → `store.upsert` → 弹层
+- 接口：`ytCardVideoId(el): string|null`；`ytCardTitle(el): string`；`ytStub(videoId, el, rule)`；`ytLoadVideo(videoId, store)`
+- 数据结构：占位条目 `{ videoId, title, author: "", streams: [] }`；`ytPending: Map<id, Promise>`
+- 算法与规则：id 正则 `[?&]v=([A-Za-z0-9_-]{11})`；标题依次取 `#video-title`、`yt-formatted-string#video-title`、`h3`、`.ytLockupMetadataViewModelTitle`，最后回退缩略图 `img[alt]`；`iconRight = 8`；`mount` 优先缩略图容器（`yt-thumbnail-view-model` / `#thumbnail`），回退 `self`；同一 id 并发只发一轮请求，成功后写 store，失败清 pending 允许重试
+- 错误与边界：卡片无 `/watch?v=`（频道、播放列表、广告外链）→ `idFrom` null 不挂；不做 hover 预取（卡片多、InnerTube 易触发人机验证，按点击现取）；接口报错时 toast 具体原因；卡片标题缺失时菜单标题用接口返回的真实标题
+- 测试要点：`tests/youtube.test.mjs`（`ytCardVideoId` 多链接/无链接、`ytCardTitle` 选择器、`ytStub`）；真页 CDP：首页 23/23 卡片挂载、点击出 9 档菜单（含 IOS 回退）
+
+#### M9.3 直链现取与分离流命名 🟢
+- **验收**：点选任一档后重新请求 `/youtubei/v1/player`，按 `label`（缺失时按 `itag`）取新直链；发出的下载请求是 `googlevideo.com/videoplayback`（不带 Cookie、带 `Range: bytes=0-`），响应 `206`；重新取链失败时退回菜单里的旧直链，仍无可用直链则 toast「该清晰度不可用」；文件名形如 `作者_标题_1080p 画面（无音轨）.mp4`，音频档为 `.m4a`；大文件走 File System Access 落盘
+- **依赖**：M2.1、M2.2、M9.1
+
+详细设计：
+- 数据流：`onPick` → `ytResolveDownload(item, stream)` → `ytFetchPlayer(item.videoId)` → `ytBuildStreams` → 按 label/itag 命中 → `ytPickReachable` 探一个可达 CDN 节点 → `download(planPromise, { streamToDisk: true })` → 进度 toast → 落盘
+- 接口：`ytResolveDownload(item, stream): Promise<DownloadPlan>`；`ytFilename(item, stream): string`；`ytHostCandidates(url): string[]`；`ytPickReachable(url): Promise<string>`
+- 数据结构：`DownloadPlan { url, credentials: "omit", headers: { Range: "bytes=0-" }, filename }`；`Stream.itag` 用于重取时定位同一编码档
+- 算法与规则：文件名 `[author, title, label].join("_")` → `sanitizeName` → 空白折叠 → 截 120 字符；`stream.kind === "audio"` 用 `.m4a`，其余 `.mp4`；直链 `http://` 统一升 `https://`；`IOS` 直链不带 `Range` 会直接 403（手机端只允许分段请求），`bytes=0-` 仍拿整份且 `Content-Length` 是总大小；googlevideo 每次下发的边缘节点不同，直链 `mn=` 参数列出候选节点 → 用同一个 `rrN---` 前缀逐个 `Range: bytes=0-0` 探测，取第一个 2xx 的节点（全部不通则用原链）
+- 错误与边界：InnerTube 重取失败/无匹配 → 退回 `stream.url`；两者皆无 →「该清晰度不可用」；googlevideo 非 2xx / 网络不可达 → kernel toast「下载失败：HTTP <status>」或「下载失败：TypeError: Failed to fetch」；分档视频无音轨由 label 明示，不做合并（与 M7.3 一致）
+- 测试要点：`tests/youtube.test.mjs`（重取命中/未命中退回旧链/两路皆无报错、节点回退、Range 头、文件名与扩展名、http→https）；真页 CDP：1080p 实际写入 77.2 MiB（4 638 次分块），144p 的 Range 请求 `206`
+
 ## 5. 不在范围内
 
-- 新平台接入范围：本轮做 **B站详情页**（`/video/BV...`）与 **卡片页**（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）、**小红书**发现页卡片与笔记详情页（`/explore/<id>`、`/discovery/item/<id>`，含卡片弹层）；B站个人主页、番剧、直播、互动视频不接；小红书搜索页与个人主页需登录、暂不验证，图文笔记无视频可下；YouTube 仍为规划。
+- 新平台接入范围：本轮做 **B站详情页**（`/video/BV...`）与 **卡片页**（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）、**小红书**发现页卡片与笔记详情页（`/explore/<id>`、`/discovery/item/<id>`、`/red_video/<id>`，含卡片弹层）、**YouTube** 播放页（`/watch?v=...`）与列表卡片（首页 / 搜索结果 / 相关推荐）；B站个人主页、番剧、直播、互动视频不接；小红书搜索页与个人主页需登录、暂不验证，图文笔记无视频可下；YouTube Shorts、直播、播放列表、会员/年龄限制视频不接。
 - B站音视频**合并**、分段单文件视频（`durl.length > 1`）、登录/大会员能力绕过不在范围内；1080P 及以上以分离流分别下载（M7.3），合并见待定项 #3。
 - 不做 `GM_download`、远程适配下发、独立 UI、常驻后台、MV3 新版本、Web/后端版、签名破解与反爬对抗。
 - `extension/` 仅作回归沙箱，不再发版。
@@ -587,3 +631,4 @@ flowchart TD
 | 2026-10-31 | 新增子需求 | 新增 M7.3「DASH 高档位分离流下载」；§2.1 `Stream` 增加 `kind: 'video' \| 'audio'`；新增待定项 #3（音视频合并后置） | 现代视频 `fnval=1` 单文件上限 720P，1080P 只在 DASH；合流成本高，先按画面/音频两次下载满足 1080P 需求 |
 | 2026-10-31 | 新增模块 | 新增 M8「平台接入（小红书）」及 M8.1/M8.2/M8.3；§3.2 目录加入 `platforms/xiaohongshu/*`；§5 范围加入发现页卡片与笔记详情页 | 用户要求继续增加小红书。该站无公开播放接口：详情数据在页面内联 `__INITIAL_STATE__`，卡片只有 id 与 `xsec_token`，档位需按令牌取同源笔记页 HTML；签名链会下发 http，需升 https 才能绕过混合内容拦截 |
 | 2026-10-31 | 新增子需求 | 新增 M7.4「卡片页按钮注入」；§2.2 adapter 增加 `stub?`/`loadItem?`/`prefetch?`，`AnchorRule` 增加 `iconRight?`；M7 模块名由「B站详情页」改为「B站」；§5 范围内加入卡片页 | 实测卡片页不需要播放页：`view?bvid` 跨域可取 cid/标题，playurl 在 www/search 源上带登录态可用；卡片只有 bvid，需占位挂载 + 点击/hover 现取档位 |
+| 2026-10-31 | 新增模块 | 新增 M9「平台接入（YouTube）」及 M9.1/M9.2/M9.3；§2.1 `Stream` 增加可选 `itag`；prd 同步新增 M9 与非目标调整 | 用户要求完成 YouTube。页面内联 `ytInitialPlayerResponse` 已只下发 SABR（无逐档直链），需在页面内用 InnerTube ANDROID_VR 客户端取 `formats/adaptiveFormats` 直链；1080P 及以上为分离流，沿用 M7.3 的「画面/音频分别下载、不合并」 |
