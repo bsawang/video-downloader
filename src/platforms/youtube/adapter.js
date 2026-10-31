@@ -91,6 +91,16 @@ export function ytBuildStreams(data) {
     out.push({ label, url: ytHttps(f.url), itag: Number(f.itag) });
   }
 
+  // 音轨只取 AAC/m4a 里码率最高的一条；合并档与独立音频档共用这条
+  const audios = adaptive.filter((f) => f && f.url && ytIsAudio(f) && /audio\/mp4/i.test(f.mimeType));
+  const bestAudio = audios.length
+    ? audios.reduce(
+        (a, b) => ((Number(b.bitrate) || 0) > (Number(a.bitrate) || 0) ? b : a),
+        audios[0]
+      )
+    : null;
+  const audioKbps = bestAudio ? Math.round((Number(bestAudio.bitrate) || 0) / 1000) : 0;
+
   // 自适应画面：同 label 取编码/码率最优的一条
   const groups = new Map();
   for (const f of adaptive) {
@@ -102,24 +112,30 @@ export function ytBuildStreams(data) {
   }
   for (const [quality, list] of groups) {
     const best = list.reduce((a, b) => (ytBetter(b, a) ? b : a), list[0]);
+    // MP4 画面 + AAC 音轨 → 一条合并档；WebM/VP9 或无 AAC 时仍列拆分画面
+    if (bestAudio && /^video\/mp4/i.test(String(best.mimeType || "")) && !seen.has(quality)) {
+      seen.add(quality);
+      out.push({
+        label: quality,
+        url: ytHttps(best.url),
+        itag: Number(best.itag),
+        kind: "mux",
+        audioItag: Number(bestAudio.itag),
+        audioUrl: ytHttps(bestAudio.url),
+      });
+      continue;
+    }
     const label = quality + " 画面（无音轨）";
     if (seen.has(label)) continue;
     seen.add(label);
     out.push({ label, url: ytHttps(best.url), itag: Number(best.itag), kind: "video" });
   }
 
-  // 音轨只取 AAC/m4a 里码率最高的一条；opus 留到后续支持 webm 封装时再说
-  const audios = adaptive.filter((f) => f && f.url && ytIsAudio(f) && /audio\/mp4/i.test(f.mimeType));
-  if (audios.length) {
-    const best = audios.reduce(
-      (a, b) => ((Number(b.bitrate) || 0) > (Number(a.bitrate) || 0) ? b : a),
-      audios[0]
-    );
-    const kbps = Math.round((Number(best.bitrate) || 0) / 1000);
+  if (bestAudio) {
     out.push({
-      label: "音频 " + (kbps ? kbps + "kbps" : ""),
-      url: ytHttps(best.url),
-      itag: Number(best.itag),
+      label: "音频 " + (audioKbps ? audioKbps + "kbps" : ""),
+      url: ytHttps(bestAudio.url),
+      itag: Number(bestAudio.itag),
       kind: "audio",
     });
   }
@@ -279,14 +295,30 @@ export async function ytResolveDownload(item, stream) {
   const hit =
     fresh.find((s) => s.label === stream.label) ||
     (stream.itag ? fresh.find((s) => s.itag === stream.itag) : null);
-  const url = (hit && hit.url) || stream.url;
-  if (!url) throw new Error("该清晰度不可用");
+  const videoUrl = (hit && hit.url) || stream.url;
+  if (!videoUrl) throw new Error("该清晰度不可用");
   // IOS client 下发的直链不带 Range 会直接 403（手机端只允许分段请求）；
   // bytes=0- 照样拿到整份，Content-Length 仍是总大小
+  const req = { credentials: "omit", headers: { Range: "bytes=0-" } };
+  if (stream.kind === "mux") {
+    const audioItag = (hit && hit.audioItag) || stream.audioItag;
+    const audio =
+      (audioItag && fresh.find((s) => s.kind === "audio" && s.itag === audioItag)) ||
+      fresh.find((s) => s.kind === "audio");
+    const audioUrl = (audio && audio.url) || stream.audioUrl;
+    if (!audioUrl) throw new Error("该清晰度缺少音轨，暂不支持合并");
+    return {
+      merge: "fmp4",
+      parts: [
+        { url: await ytPickReachable(videoUrl), ...req },
+        { url: await ytPickReachable(audioUrl), ...req },
+      ],
+      filename: ytFilename(item, stream),
+    };
+  }
   return {
-    url: await ytPickReachable(url),
-    credentials: "omit",
-    headers: { Range: "bytes=0-" },
+    url: await ytPickReachable(videoUrl),
+    ...req,
     filename: ytFilename(item, stream),
   };
 }

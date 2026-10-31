@@ -61,11 +61,11 @@ function pickDashAudio(list) {
 }
 
 // 单文件接口拿不到、只能走 DASH 的档位（现代视频通常是 1080P 及以上）。
-// 每档拆成「画面（无音轨）」与「音频」两条，各下一份；合并留到后续后处理。
+// 有 AAC 音轨时合并成一条「高清 1080P」档，点选后一次落成一个 MP4；
+// 没有音轨时退回「画面（无音轨）」拆分档。
 export function buildBiliDashStreams(durlData, dashData) {
   const dash = dashData && dashData.dash;
   if (!dash || !Array.isArray(dash.video) || !dash.video.length) return [];
-  if (!Array.isArray(dash.audio) || !dash.audio.length) return [];
   const durlStreams = buildBiliStreams(durlData);
   const durlMax = durlStreams.length ? Math.max(...durlStreams.map((s) => s.qn)) : -1;
   const qs = (dashData.accept_quality) || [];
@@ -81,11 +81,16 @@ export function buildBiliDashStreams(durlData, dashData) {
     if (!groups.has(qn)) groups.set(qn, []);
     groups.get(qn).push(video);
   }
+  const hasAudio = Array.isArray(dash.audio) && dash.audio.length > 0;
   const out = [];
   for (const [qn, list] of groups) {
     const desc = descOf(qn);
-    out.push({ label: desc + " 画面（无音轨）", qn, kind: "video" });
-    out.push({ label: desc + " 音频", qn, kind: "audio" });
+    if (hasAudio) {
+      out.push({ label: desc, qn, kind: "mux" });
+      out.push({ label: desc + " 音频", qn, kind: "audio" });
+    } else {
+      out.push({ label: desc + " 画面（无音轨）", qn, kind: "video" });
+    }
   }
   return sortStreams(out);
 }
@@ -128,6 +133,26 @@ export function biliNormalizeStreams(raw) {
 
 // 直链两小时过期，点下载时才现取；单文件走 durl，分离流走 DASH 的 baseUrl。
 export async function biliResolveDownload(item, stream) {
+  if (stream.kind === "mux") {
+    const resp = await fetch(biliPlayurlUrl(item, stream.qn, BILI_DASH_FNVAL), {
+      credentials: "include",
+    });
+    const json = await resp.json();
+    const dash = (json.data && json.data.dash) || {};
+    const same = (dash.video || []).filter((v) => Number(v.id) === Number(stream.qn));
+    const videoUrl = same.length ? dashUrl(pickDashVideo(same)) : "";
+    const audio = dash.audio || [];
+    const audioUrl = audio.length ? dashUrl(pickDashAudio(audio)) : "";
+    if (!videoUrl || !audioUrl) throw new Error("该清晰度不可用");
+    return {
+      merge: "fmp4",
+      parts: [
+        { url: videoUrl, credentials: "omit" },
+        { url: audioUrl, credentials: "omit" },
+      ],
+      filename: biliFilename(item, stream),
+    };
+  }
   if (stream.kind === "video" || stream.kind === "audio") {
     const resp = await fetch(biliPlayurlUrl(item, stream.qn, BILI_DASH_FNVAL), {
       credentials: "include",

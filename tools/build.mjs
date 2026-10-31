@@ -20,6 +20,7 @@ const ORDER = [
   "kernel/hook.js",
   "kernel/mount.js",
   "kernel/ui.js",
+  "kernel/merge.js",
   "kernel/download.js",
   "kernel/core.js",
   "platforms/douyin/rules.js",

@@ -29,6 +29,32 @@
 | M9.2 | ✅ | 批次 6 |
 | M9.3 | ✅ | 批次 6 |
 | M9.4 | ✅ | 批次 7 |
+| M10.1 | ✅ | 批次 8 |
+| M10.2 | ✅ | 批次 8 |
+| M10.3 | ✅ | 批次 8 |
+| M10.4 | ✅ | 批次 8 |
+
+## v0.14.0 ✅ {spec §M10 · 音视频合并下载}
+- 目标：分离流档位（YouTube 自适应 / B站 DASH）点一档只下一个文件（画面+音轨无损合并在浏览器内完成）
+- 方案定案：自写零依赖 fMP4 box 合并（不引入 mediabunny / ffmpeg.wasm，不做云端队列）；实测 dist 72 841 B → 90 498 B（+17 657 B，+24.2%，合并器本体 10 297 B）
+- 子需求：M10.1 合并算法 → M10.2 合并下载编排 → M10.3 YouTube 合并档 → M10.4 B站合并档
+- 实现：
+  - [src/kernel/merge.js](file:///E:/work/ai/video-downloader/src/kernel/merge.js)：box 解析（含 `largesize` / `size=0`）、单 `moov` 双 `trak` 合并、`tkhd`/`trex`/`tfhd` track_ID 补丁、`mvhd.next_track_ID` 补丁、丢弃 `sidx/ssix/mfra`、媒体段视频→音频流式搬箱
+  - [src/kernel/download.js](file:///E:/work/ai/video-downloader/src/kernel/download.js)：`MuxPlan` 编排；OPFS 临时文件（不可用回退内存，512 MiB 上限）；两路分别上报进度；任一路截断 `abort`；成功/失败都清理临时文件；无 picker 时落 blob
+  - [src/platforms/youtube/adapter.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/adapter.js)：MP4 自适应画面 + AAC → 单条合并档（`kind:"mux"` + `audioItag/audioUrl`）；VP9/WebM 或无 AAC 保留拆分
+  - [src/platforms/bilibili/adapter.js](file:///E:/work/ai/video-downloader/src/platforms/bilibili/adapter.js)：DASH 高档位有标准 AAC 时输出合并档，否则拆分；点选时一次 `fnval=4048` 现取两路
+  - [tools/build.mjs](file:///E:/work/ai/video-downloader/tools/build.mjs)：`ORDER` 补 `kernel/merge.js`（首次真页点下载暴露 `mergeFmp4Blobs is not defined`，单测走 ESM import 抓不到漏拼）
+- 单测：`npm test` **118 pass / 0 fail**（`tests/merge.test.mjs` 6 例；`tests/download.test.mjs` 增合并落盘/两路进度/截断中止/非分片合并失败/临时文件创建失败回退/内存回退/blob 回退/picker 取消 7 例；两个 adapter 合并档与拆分回退；新增 `tests/build.test.mjs` 校验每个 `src` 模块都进了产物）
+- 真页收点（CDP 注入最终构建 0.14.0，B站 `BV1GJ411x7h7`）：
+  - 菜单：`高清 1080P`（合并档）/ `高清 1080P 音频` / `高清 720P` / `流畅 360P`；点合并档只弹 1 次保存对话框
+  - 落盘：OPFS 输出 **75 165 765 B**，353 次写入，`closed:true` / `aborted:false`；toast 序列含 `合并中 33%…97%` → **`✓ 下载完成（已合并）`**
+  - 结构：`ftyp + moov(mvhd,mvex,trak,trak,udta) + moof/mdat…`，`tkhd` id `[1,2]`、`trex` id `[1,2]`
+  - 可播放：同一文件挂 `video`，`duration 212.308833s`、`1920x1080`、`readyState 4`、`played:true`
+  - CDN：两路 `Range: bytes=0-1023` 均 `206`、正文 1024 B、首盒 `ftyp`；两路完整下载由 `content-length` 校验（截断会 abort）
+  - 临时清理：成功与失败两次运行后 OPFS 根目录只剩验证输出文件，`dl-merge-*` 无残留
+  - 过程缺陷：首次真页点下载报 `mergeFmp4Blobs is not defined`（`tools/build.mjs` 的 `ORDER` 漏了 `kernel/merge.js`），补 `ORDER` 并新增 `tests/build.test.mjs` 防回归；修复后重跑通过
+- 构建：`npm run build` → `dist/douyin.user.js` **90 498 B**，`node --check` 通过，`@version 0.14.0`，sha256 `11800a5809b9d158d0bb32015e8ebd9ec76b24ed56cfbc315a63a49d10b9567c`
+
 
 ## v0.13.0 ✅ {spec §M9.4 · Shorts 接入 + hover 预览下按钮存活}
 - 缺陷 / 需求（用户反馈）：

@@ -201,7 +201,7 @@ test("buildBiliDashStreams 只补单文件拿不到的高档位，并拆画面/�
     },
   };
   assert.deepEqual(buildBiliDashStreams(durl, dash), [
-    { label: "高清 1080P 画面（无音轨）", qn: 80, kind: "video" },
+    { label: "高清 1080P", qn: 80, kind: "mux" },
     { label: "高清 1080P 音频", qn: 80, kind: "audio" },
   ]);
 });
@@ -220,8 +220,20 @@ test("buildBiliDashStreams 单文件已有 1080P 时不重复补", () => {
     },
   };
   assert.deepEqual(buildBiliDashStreams(durl, dash), [
-    { label: "高清 1080P+ 画面（无音轨）", qn: 112, kind: "video" },
+    { label: "高清 1080P+", qn: 112, kind: "mux" },
     { label: "高清 1080P+ 音频", qn: 112, kind: "audio" },
+  ]);
+});
+
+test("buildBiliDashStreams 无 AAC 音轨时保留拆分画面", () => {
+  const durl = { accept_quality: [64], accept_description: ["高清 720P"] };
+  const dash = {
+    accept_quality: [80],
+    accept_description: ["高清 1080P"],
+    dash: { video: [{ id: 80, codecid: 7, bandwidth: 2000, baseUrl: "v" }], audio: [] },
+  };
+  assert.deepEqual(buildBiliDashStreams(durl, dash), [
+    { label: "高清 1080P 画面（无音轨）", qn: 80, kind: "video" },
   ]);
 });
 
@@ -239,7 +251,7 @@ test("biliParsePlayurl 合并 DASH 档位并按清晰度排序", () => {
     }
   );
   assert.deepEqual(item.streams.map((s) => s.label), [
-    "高清 1080P 画面（无音轨）",
+    "高清 1080P",
     "高清 1080P 音频",
     "高清 720P",
     "流畅 360P",
@@ -276,6 +288,41 @@ test("biliResolveDownload 分离视频流选 AVC 并现取 baseUrl", async () =>
     assert.equal(plan.url, "https://cdn/avc.m4s");
     assert.equal(plan.credentials, "omit");
     assert.equal(plan.filename, "up_t_高清 1080P 画面（无音轨）.mp4");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("biliResolveDownload 合并档返回画面 + 音轨两路", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    json: async () => ({
+      code: 0,
+      data: {
+        dash: {
+          video: [
+            { id: 80, codecid: 12, bandwidth: 3000, baseUrl: "https://cdn/hevc.m4s" },
+            { id: 80, codecid: 7, bandwidth: 2000, baseUrl: "https://cdn/avc.m4s" },
+          ],
+          audio: [{ id: 30280, bandwidth: 192000, baseUrl: "https://cdn/a.m4s" }],
+        },
+      },
+    }),
+  });
+  try {
+    const plan = await biliResolveDownload(
+      { bvid: "BV1", cid: "1", author: "up", title: "t", page: 1, pageCount: 1, part: "" },
+      { label: "高清 1080P", qn: 80, kind: "mux" }
+    );
+    assert.equal(plan.merge, "fmp4");
+    assert.deepEqual(
+      plan.parts.map((p) => [p.url, p.credentials]),
+      [
+        ["https://cdn/avc.m4s", "omit"],
+        ["https://cdn/a.m4s", "omit"],
+      ]
+    );
+    assert.equal(plan.filename, "up_t_高清 1080P.mp4");
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -455,7 +502,7 @@ test("biliLoadCard 依次查 view 与两路 playurl，并写入 store", async ()
     assert.equal(item.author, "卡片UP");
     assert.deepEqual(
       item.streams.map((s) => s.label),
-      ["高清 1080P 画面（无音轨）", "高清 1080P 音频", "高清 720P", "流畅 360P"]
+      ["高清 1080P", "高清 1080P 音频", "高清 720P", "流畅 360P"]
     );
     assert.equal(store.get("BV1card").streams.length, 4);
     await biliLoadCard("BV1card", store);

@@ -28,11 +28,13 @@ VideoItem = {
   fallback?: boolean,         // perf 兜底构造的条目（不进 store，仅本次渲染）
   [extra: string]: unknown    // 平台附加字段（如 B站 bvid/cid/page/pageCount/part），kernel 不读
 }
-Stream = { label: string, url?: string, qn?: number, itag?: number, kind?: 'video' | 'audio' }
+Stream = { label: string, url?: string, qn?: number, itag?: number,
+           kind?: 'video' | 'audio' | 'mux', audioItag?: number }
 // label 如 "1080p" / "1080P"；url 为带签名的直链，能预取到时才填；
 // 直链会过期的平台只记平台档位码（B站 qn / YouTube itag），点下载时由 adapter.resolveDownload 现取；
-// kind 标记分离流（画面/音频各一条），缺省为可直接播放的单文件流
+// kind 标记分离流（画面/音频各一条）；'mux' 表示该档由画面+音轨合并输出，缺省为可直接播放的单文件流
 DownloadPlan = { url: string, credentials: 'omit' | 'include', headers?: Record<string,string>, filename?: string }
+MuxPlan = { parts: [DownloadPlan, DownloadPlan], merge: 'fmp4', filename?: string } // parts[0] 画面，parts[1] 音轨
 ```
 
 ### 2.2 平台适配契约
@@ -48,7 +50,7 @@ PlatformAdapter = {
   refresh?: (store: Store) => Promise<void>, // 平台数据需现取时由 adapter 自己拉，见 M1.2
   parse(raw: object): VideoItem | null,    // 平台原始条目 → 中性条目
   normalizeStreams(raw: object): Stream[], // 平台清晰度 → 中性流
-  resolveDownload(item: VideoItem, stream: Stream): DownloadPlan | Promise<DownloadPlan>, // 允许异步现取直链
+  resolveDownload(item: VideoItem, stream: Stream): DownloadPlan | MuxPlan | Promise<DownloadPlan | MuxPlan>, // 允许异步现取直链、合并档返回两路
   filename?(item: VideoItem, stream: Stream): string, // 平台自定义文件名（B站含分P），缺省用 kernel 规则
   streamToDisk?: boolean,                  // 长视频落盘：true 时走 File System Access，见 M2.2
   stub?(videoId: string, el: Element, rule: AnchorRule): VideoItem | null, // 只知 id 时先挂占位条目，见 M7.4
@@ -92,7 +94,8 @@ src/kernel/store.js        候选仓库：upsert / merge / get
 src/kernel/hook.js         多源采集调度（fetch/XHR/SSR/DOM/perf）
 src/kernel/mount.js        规则驱动扫描 + 挂载
 src/kernel/ui.js           hover / popover / toast
-src/kernel/download.js     DownloadPlan → blob transport / File System Access 落盘
+src/kernel/download.js     DownloadPlan → blob transport / File System Access 落盘 / 合并下载编排
+src/kernel/merge.js        零依赖 fMP4 box 解析与音视频分片合并
 src/kernel/core.js         组装 kernel，暴露 start(adapter)
 src/platforms/douyin/rules.js    抖音全部常量与规则
 src/platforms/douyin/adapter.js  parse / normalizeStreams / resolveDownload
@@ -163,6 +166,14 @@ extension/                 冻结，仅回归沙箱
 | M8.1 | M8 | 笔记详情页识别与清晰度 | 🟢 |
 | M8.2 | M8 | 卡片页占位挂载与令牌现取 | 🟢 |
 | M8.3 | M8 | 签名直链现取与 http→https 升级 | 🟢 |
+| M9.1 | M9 | 播放页识别与清晰度 | 🟢 |
+| M9.2 | M9 | 列表卡片占位挂载与现取 | 🟢 |
+| M9.3 | M9 | 直链现取与分离流命名 | 🟢 |
+| M9.4 | M9 | Shorts 播放页与 Shorts 卡片 | 🟢 |
+| M10.1 | M10 | fMP4 分片合并 | ✅ |
+| M10.2 | M10 | 合并下载执行 | ✅ |
+| M10.3 | M10 | YouTube 合并档位 | ✅ |
+| M10.4 | M10 | B站合并档位 | ✅ |
 
 ### 需求树（依赖图）
 
@@ -229,6 +240,15 @@ flowchart TD
     M2.2 --> M8.3
     M8.1 --> M8.3
     M8.2 --> M8.3
+    M2 --> M10
+    M6 --> M10
+    M10.1 --> M10.2
+    M9.1 --> M10.3
+    M9.3 --> M10.3
+    M10.2 --> M10.3
+    M7.1 --> M10.4
+    M7.3 --> M10.4
+    M10.2 --> M10.4
 ```
 
 ### M1 视频识别与数据采集 🟢
@@ -468,17 +488,17 @@ flowchart TD
 - 错误与边界：切 P 瞬间状态短暂为空 → 下一轮重试；URL `p` 越界回退第 1P；重复 upsert 由 store 按 cid 去重；picker 取消（`AbortError`）→ toast「已取消下载」且不发请求；浏览器不支持 `showSaveFilePicker` → 静默回落 blob 路径（超长视频有内存风险，README 注明）
 - 测试要点：`tests/bilibili.test.mjs`（当前 P 定位、多分P文件名、refresh 每 cid 一次）；`tests/download.test.mjs`（Promise 计划、落盘字节、取消不请求）；真页 CDP：P3 → P1 菜单/文件名跟随，落盘 2,350,008 B 与服务端一致
 
-#### M7.3 DASH 高档位分离流下载 🟢
-- **验收**：登录态下打开单文件仅 720P 的现代视频，菜单在 720P 之上出现「高清 1080P 画面（无音轨）」与「高清 1080P 音频」；分别点选各得一个文件（`.mp4` / `.m4a`），CDN 返回 `206` 且字节数与 `content-range` 一致；单文件已含同档（旧视频 1080P）时不出现重复项
-- **依赖**：M1.2、M2.2、M7.1
+#### M7.3 DASH 高档位分离流下载与合并 🟢
+- **验收**：登录态下打开单文件仅 720P 的现代视频，菜单在 720P 之上出现「高清 1080P」（合并档，一条）与「高清 1080P 音频」；点「高清 1080P」只弹一次保存对话框，两路 CDN 请求（画面 + 音轨）均返回 `206`，最终落成**一个可直接播放的 MP4**（单视频轨 + 单音轨）；点「高清 1080P 音频」仍得 `.m4a`；单文件已含同档（旧视频 1080P）时不出现重复项；两路不是分片 MP4 或缺少 AAC 音轨时，回落为原来的「画面（无音轨）/ 音频」两条并在菜单明示
+- **依赖**：M1.2、M2.2、M7.1、M10.2
 
 详细设计：
-- 数据流：`refresh` 并发请求 `fnval=1`（单文件低档）与 `fnval=4048`（DASH）→ `buildBiliDashStreams` 取 `dash.video` 中 `qn > 单文件最高档` 的档位，每档追加「画面（无音轨）」「音频」两条 stream → store → 菜单；点选 → `biliResolveDownload` 按 `kind` 再请求 `fnval=4048` → 选流 → `baseUrl` → 现有落盘链路
-- 接口：`biliPlayurlUrl(meta, qn, fnval=1)`；`buildBiliDashStreams(durlData, dashData): Stream[]`；`biliParsePlayurl(data, meta, dashData?)`；`biliResolveDownload(item, stream)` 支持 `stream.kind`
-- 数据结构：分离流无预置 `url`，只有 `{ label, qn, kind }`；DASH 条目含 `id/codecid/bandwidth/baseUrl/backupUrl`
-- 算法与规则：`durlMax = max(单文件档 qn)`，只补严格大于它的档；同 qn 多编码取 `codecid=7`（AVC），否则取最高带宽；音频优先标准 AAC（`30216/30232/30280`）并取最高带宽；URL 依次取 `baseUrl → base_url → backupUrl[0]`；标签为 `accept_description + " 画面（无音轨）" / " 音频"`；文件名扩展名按 kind 取 `.mp4` / `.m4a`
-- 错误与边界：DASH 请求失败不影响单文件档（`Promise.all` 各自 catch）；无 `dash.audio` 时不补分离档；所选 qn 在 DASH 中不存在 → 「该清晰度不可用」；直链约 2 小时过期，点选时现取；不合并音视频（见待定项 #3）。**档位可得性随登录态**：未登录时 `dash.video` 不含 1080（接口 `accept_quality` 仍列 80 但不发流），菜单按实际 `dash.video` 档位补，故不出现死链行；登录非会员可得 1080P，1080P+（qn 112）需大会员。直链为 CDN 签名 URL（含 `deadline`），下载带 `credentials: "omit"` 可行，CDN 校验 `Referer`（浏览器同源策略下自动带上 `https://www.bilibili.com/`）
-- 测试要点：`tests/bilibili.test.mjs`（只补高于单文件档、已含同档不重复、AVC 优先、AAC 最高码率、缺档报错、refresh 两路并发）；真页 CDP：菜单出现 1080P 两条、各落一份、Range `206`
+- 数据流：`refresh` 并发请求 `fnval=1`（单文件低档）与 `fnval=4048`（DASH）→ `buildBiliDashStreams` 取 `dash.video` 中 `qn > 单文件最高档` 的档位，每档给一条 `kind: "mux"`（合并）与一条音频；store → 菜单；点合并档 → `biliResolveDownload` 按 `qn` 再请求 `fnval=4048`，同时取所选画面与标准 AAC → 返回 `MuxPlan` → kernel 合并下载（M10.2）
+- 接口：`biliPlayurlUrl(meta, qn, fnval=1)`；`buildBiliDashStreams(durlData, dashData): Stream[]`；`biliParsePlayurl(data, meta, dashData?)`；`biliResolveDownload(item, stream)` 支持 `stream.kind` 的 `'mux' | 'video' | 'audio'`
+- 数据结构：分离流无预置 `url`，合并档为 `{ label, qn, kind: "mux" }`；DASH 条目含 `id/codecid/bandwidth/baseUrl/backupUrl`；`MuxPlan.parts = [画面, 音频]`
+- 算法与规则：`durlMax = max(单文件档 qn)`，只补严格大于它的档；同 qn 多编码取 `codecid=7`（AVC），否则取最高带宽（AV1/HEVC 仍是 m4s 分片，容器层可合并）；音频优先标准 AAC（`30216/30232/30280`）并取最高带宽；URL 依次取 `baseUrl → base_url → backupUrl[0]`；合并档标签为 `accept_description`，音频档为 `accept_description + " 音频"`；合并档文件名扩展名 `.mp4`，音频 `.m4a`；`dash.audio` 为空时只给「画面（无音轨）」拆分档
+- 错误与边界：DASH 请求失败不影响单文件档（`Promise.all` 各自 catch）；所选 qn 在 DASH 中不存在 → 「该清晰度不可用」；直链约 2 小时过期，点选时现取；合并失败（非分片 MP4 / 容器异常）→ `writable.abort()` 并提示，不产出半成品。**档位可得性随登录态**：未登录时 `dash.video` 不含 1080（接口 `accept_quality` 仍列 80 但不发流），菜单按实际 `dash.video` 档位补，故不出现死链行；登录非会员可得 1080P，1080P+（qn 112）需大会员。直链为 CDN 签名 URL（含 `deadline`），下载带 `credentials: "omit"` 可行，CDN 校验 `Referer`（浏览器同源策略下自动带上 `https://www.bilibili.com/`）
+- 测试要点：`tests/bilibili.test.mjs`（只补高于单文件档、已含同档不重复、AVC 优先、AAC 最高码率、缺档报错、refresh 两路并发、合并档 `MuxPlan` 两路 URL）；`tests/merge.test.mjs`（合成 m4s 合并）；真页 CDP：菜单出现「高清 1080P」一条，点选后两条 CDN `206`，落盘单文件可播放
 
 #### M7.4 卡片页按钮注入（占位挂载 + 现取档位）🟢
 - **验收**：`www.bilibili.com` 首页、热门（推荐列表与排行）、`search.bilibili.com`、详情页右侧推荐位，每张带 `/video/BV` 链接的视频卡片 hover 出 ⬇（不与右上角「稍后再看」重叠）；点开菜单列出该视频真实档位（登录态含 1080P 分离流两条）；冷启动点击 ≤2s 出菜单；广告卡（只有 `cm.bilibili.com` 跳转、无 BV）不注入；多分P视频默认只下 P1
@@ -545,14 +565,14 @@ flowchart TD
 - 被谁依赖：M6
 
 #### M9.1 播放页识别与清晰度 🟢
-- **验收**：打开 `https://www.youtube.com/watch?v=<11位id>` 后，播放器右上 12px 处出现 **⬇ 下载**；菜单按清晰度降序列出 `Np`（单文件含音轨）、`Np 画面（无音轨）`（自适应）与 `音频 <kbps>kbps`，与 `youtubei/v1/player` 返回的 `formats/adaptiveFormats` 一致；同分辨率优先 H.264；页面无 pageerror
+- **验收**：打开 `https://www.youtube.com/watch?v=<11位id>` 后，播放器右上 12px 处出现 **⬇ 下载**；菜单按清晰度降序列出 `Np`（单文件含音轨）、`Np`（自适应画面 + AAC 合并）、`音频 <kbps>kbps`，与 `youtubei/v1/player` 返回的 `formats/adaptiveFormats` 一致；同分辨率优先 H.264；自适应画面为 WebM/VP9 或没有 AAC 音轨时，保留 `Np 画面（无音轨）` 拆分条目；页面无 pageerror
 - **依赖**：M1.2、M2.1、M3.1
 
 详细设计：
 - 数据流：entry 按 `matches` 选中 `youtubeAdapter` → `start()` → 500ms / 每 2000ms `refresh` → `ytRefresh` 从地址栏取 `v=` → 已有档位跳过，否则 `ytLoadVideo` 请求 InnerTube → `ytParsePlayer` 转条目 → `store.upsert` → `renderAll` 用 `#movie_player` 规则（`idFrom` 读地址栏 id）→ 挂 `self`，`pos = { top: 12, right: 12 }`
 - 接口：`ytVideoIdFromUrl(href): string|null`；`ytCurrentVideoId(loc?): string|null`；`ytApiKey(): string`；`ytPlayerBody(videoId, client?)`；`ytFetchPlayer(videoId): Promise<object>`；`ytBuildStreams(data): Stream[]`；`ytParsePlayer(data, videoId?): VideoItem|null`；`ytLoadVideo(videoId, store): Promise<VideoItem>`；`ytRefresh(store): Promise<void>`；`ytStub(videoId, el, rule)`
 - 数据结构：`Stream { label, url, itag, kind? }`（`kind` 缺省为单文件、`video`/`audio` 为分离流）；`VideoItem { videoId, title: videoDetails.title, author: videoDetails.author, streams }`；`ytPending: Map<id, Promise>` 并发去重；`YT_CLIENTS` 依次为 `{ clientName: "ANDROID_VR", clientVersion: "1.62.27", androidSdkVersion: 32, osName: "Android", osVersion: "12", deviceMake: "Oculus", deviceModel: "Quest 3", hl: "en", gl: "US" }` 与 `{ clientName: "IOS", clientVersion: "20.10.4", deviceModel: "iPhone16,2", osName: "iPhone", osVersion: "18.3.2.22D82", hl: "en", gl: "US" }`
-- 算法与规则：API key 取 `ytcfg.get("INNERTUBE_API_KEY")`，取不到用固定 key 兜底；`formats` 中 `mimeType` 以 `video/` 开头且有 `url` 的按 `qualityLabel` 入列（单文件含音轨，label 即 `qualityLabel`）；`adaptiveFormats` 中视频按 `qualityLabel` 分组，组内按「avc1 → vp9 → 其他」再比 `bitrate` 取最优，label 为 `qualityLabel + " 画面（无音轨）"`；音频只取 `audio/mp4`（AAC）中 `bitrate` 最高一条，label 为 `音频 <round(bitrate/1000)>kbps`；全部经 `sortStreams` 降序；`ANDROID_VR` 有 progressive（单文件带音轨），音乐厂牌等版权方视频会回 `LOGIN_REQUIRED`（`reason` 含「not a bot」），此时换 `IOS` 重试——`IOS` 对这些视频仍给 adaptive 直链（1080p 仍是 avc1 + AAC），但没有单文件档；播放页 `stub` 先挂占位按钮，标题取页面标题去掉 ` - YouTube` 后缀
+- 算法与规则：API key 取 `ytcfg.get("INNERTUBE_API_KEY")`，取不到用固定 key 兜底；`formats` 中 `mimeType` 以 `video/` 开头且有 `url` 的按 `qualityLabel` 入列（单文件含音轨，label 即 `qualityLabel`）；`adaptiveFormats` 中视频按 `qualityLabel` 分组，组内按「avc1 → vp9 → 其他」再比 `bitrate` 取最优；选中项是 `video/mp4` 且存在 AAC 音轨（`audio/mp4` 中码率最高）时，该档输出一条 `kind: "mux"`（label 即 `qualityLabel`，附 `audioItag`），否则输出 `qualityLabel + " 画面（无音轨）"` 的 `kind: "video"`；音频档 label 为 `音频 <round(bitrate/1000)>kbps`；全部经 `sortStreams` 降序；`ANDROID_VR` 有 progressive（单文件带音轨），音乐厂牌等版权方视频会回 `LOGIN_REQUIRED`（`reason` 含「not a bot」），此时换 `IOS` 重试——`IOS` 对这些视频仍给 adaptive 直链（1080p 仍是 avc1 + AAC），但没有单文件档；播放页 `stub` 先挂占位按钮，标题取页面标题去掉 ` - YouTube` 后缀
 - 错误与边界：`playabilityStatus.status !== "OK"` 且两个 client 都失败 → 抛错：`reason` 含「not a bot」→「YouTube 要求人机验证，请先在浏览器打开该视频后再试」，`LOGIN_REQUIRED` →「该视频需要登录或年龄验证」，其余用 `reason`；非 2xx → `HTTP <status>`；OK 但无任何 `formats/adaptiveFormats` → 换下一个 client，全部落空 →「该视频没有可下载的清晰度」；refresh 失败静默、5s 内不重试同一 id；SPA 切视频后地址变化 → 新 id 走 stub + refresh 自愈；直播页不匹配（非 `/watch`、非 `/shorts`）；Shorts 见 M9.4
 - 测试要点：`tests/youtube.test.mjs`（id 解析、单文件/自适应/音频构建、AVC 优先、排序、`ytParsePlayer` 元信息、`ytFetchPlayer` 请求体/风控回退、`ytLoadVideo` 缓存/并发、`ytRefresh` 跳过已有档位）；真页 CDP：`watch?v=dQw4w9WgXcQ` 按钮挂载与 10 档菜单、1080p 实际传输 77.2 MiB
 
@@ -569,16 +589,16 @@ flowchart TD
 - 测试要点：`tests/youtube.test.mjs`（`ytCardVideoId` 多链接/无链接、Shorts 链接、`ytCardTitle` 选择器、`ytStub`、卡片锚点 `alwaysShow`）；真页 CDP：首页 23/23 卡片挂载、按钮常显、预览播放中按钮仍可点开菜单（含 IOS 回退）
 
 #### M9.3 直链现取与分离流命名 🟢
-- **验收**：点选任一档后重新请求 `/youtubei/v1/player`，按 `label`（缺失时按 `itag`）取新直链；发出的下载请求是 `googlevideo.com/videoplayback`（不带 Cookie、带 `Range: bytes=0-`），响应 `206`；重新取链失败时退回菜单里的旧直链，仍无可用直链则 toast「该清晰度不可用」；文件名形如 `作者_标题_1080p 画面（无音轨）.mp4`，音频档为 `.m4a`；大文件走 File System Access 落盘
-- **依赖**：M2.1、M2.2、M9.1
+- **验收**：点选任一档后重新请求 `/youtubei/v1/player`，按 `label`（缺失时按 `itag`）取新直链；分离流发出的下载请求是 `googlevideo.com/videoplayback`（不带 Cookie、带 `Range: bytes=0-`），响应 `206`；合并档同时取画面与音频两路（`itag` 与 `audioItag`），落成一个 MP4；重新取链失败时退回菜单里的旧直链，仍无可用直链则 toast「该清晰度不可用」；文件名形如 `作者_标题_1080p.mp4`（合并）、`作者_标题_1080p 画面（无音轨）.mp4`（不兼容拆分）、`作者_标题_音频 130kbps.m4a`；大文件走 File System Access 落盘
+- **依赖**：M2.1、M2.2、M9.1、M10.2
 
 详细设计：
-- 数据流：`onPick` → `ytResolveDownload(item, stream)` → `ytFetchPlayer(item.videoId)` → `ytBuildStreams` → 按 label/itag 命中 → `ytPickReachable` 探一个可达 CDN 节点 → `download(planPromise, { streamToDisk: true })` → 进度 toast → 落盘
-- 接口：`ytResolveDownload(item, stream): Promise<DownloadPlan>`；`ytFilename(item, stream): string`；`ytHostCandidates(url): string[]`；`ytPickReachable(url): Promise<string>`
-- 数据结构：`DownloadPlan { url, credentials: "omit", headers: { Range: "bytes=0-" }, filename }`；`Stream.itag` 用于重取时定位同一编码档
-- 算法与规则：文件名 `[author, title, label].join("_")` → `sanitizeName` → 空白折叠 → 截 120 字符；`stream.kind === "audio"` 用 `.m4a`，其余 `.mp4`；直链 `http://` 统一升 `https://`；`IOS` 直链不带 `Range` 会直接 403（手机端只允许分段请求），`bytes=0-` 仍拿整份且 `Content-Length` 是总大小；googlevideo 每次下发的边缘节点不同，直链 `mn=` 参数列出候选节点 → 用同一个 `rrN---` 前缀逐个 `Range: bytes=0-0` 探测，取第一个 2xx 的节点（全部不通则用原链）
-- 错误与边界：InnerTube 重取失败/无匹配 → 退回 `stream.url`；两者皆无 →「该清晰度不可用」；googlevideo 非 2xx / 网络不可达 → kernel toast「下载失败：HTTP <status>」或「下载失败：TypeError: Failed to fetch」；分档视频无音轨由 label 明示，不做合并（与 M7.3 一致）
-- 测试要点：`tests/youtube.test.mjs`（重取命中/未命中退回旧链/两路皆无报错、节点回退、Range 头、文件名与扩展名、http→https）；真页 CDP：1080p 实际写入 77.2 MiB（4 638 次分块），144p 的 Range 请求 `206`
+- 数据流：`onPick` → `ytResolveDownload(item, stream)` → `ytFetchPlayer(item.videoId)` → `ytBuildStreams` → 按 label/itag 命中 → 合并档再按 `audioItag` 命中音轨 → `ytPickReachable` 分别探节点 → 返回 `MuxPlan` → `download(planPromise, { streamToDisk: true })` → 合并落盘
+- 接口：`ytResolveDownload(item, stream): Promise<DownloadPlan | MuxPlan>`；`ytFilename(item, stream): string`；`ytHostCandidates(url): string[]`；`ytPickReachable(url): Promise<string>`
+- 数据结构：`DownloadPlan { url, credentials: "omit", headers: { Range: "bytes=0-" }, filename }`；`MuxPlan { merge: "fmp4", parts: [画面, 音轨], filename }`；`Stream.itag` / `Stream.audioItag` 用于重取时定位同一编码档
+- 算法与规则：文件名 `[author, title, label].join("_")` → `sanitizeName` → 空白折叠 → 截 120 字符；`stream.kind === "audio"` 用 `.m4a`，其余 `.mp4`；直链 `http://` 统一升 `https://`；`IOS` 直链不带 `Range` 会直接 403（手机端只允许分段请求），`bytes=0-` 仍拿整份且 `Content-Length` 是总大小；googlevideo 每次下发的边缘节点不同，直链 `mn=` 参数列出候选节点 → 用同一个 `rrN---` 前缀逐个 `Range: bytes=0-0` 探测，取第一个 2xx 的节点（全部不通则用原链）；音轨按 `audioItag` 命中，命中失败时取 `ytBuildStreams` 里码率最高的 AAC
+- 错误与边界：InnerTube 重取失败/无匹配 → 退回 `stream.url`；两者皆无 →「该清晰度不可用」；googlevideo 非 2xx / 网络不可达 → kernel toast「下载失败：HTTP <status>」或「下载失败：TypeError: Failed to fetch」；合并档缺音轨 → 回落拆分下载仅画面档并提示；非分片 MP4 由 kernel 拒绝合并（M10.1）
+- 测试要点：`tests/youtube.test.mjs`（重取命中/未命中退回旧链/两路皆无报错、节点回退、Range 头、合并档 `MuxPlan` 两路、文件名与扩展名、http→https）；真页 CDP：合并档两条 googlevideo `206`、落盘单文件可播放；144p 的 Range 请求 `206`
 
 #### M9.4 Shorts 播放页与 Shorts 卡片 🟢
 - **验收**：打开 `https://www.youtube.com/shorts/<11位id>` 后，竖屏播放器（`#shorts-player`）右上（站点顶部控件行下方，`top: 70 / right: 12`）出现 **⬇ 下载**，hover 播放器时显示、命中测试为按钮本身，菜单档位与 `youtubei/v1/player` 一致；首页 Shorts 货架卡片（`ytm-shorts-lockup-view-model`）按钮常显（缩略图右上 8px），点击出该 Short 的档位菜单；滑动切换 Short 后按钮随地址栏 id 更新；直播/播放列表页不注入
@@ -593,10 +613,66 @@ flowchart TD
 - 错误与边界：`/shorts` 下取不到 id → 不挂；Shorts 页的 `#movie_player` 是 0×0 隐藏节点，不得作为详情锚点（`pageScope` 限 `/watch`）；受限 Short 的报错沿用 M9.1 文案；卡片链接不是视频（频道/播放列表）→ `idFrom` null 不挂
 - 测试要点：`tests/youtube.test.mjs`（`/shorts/` 解析、`ytCurrentVideoId` 读 pathname、Shorts 卡片 id、`#movie_player` 与 `#shorts-player` 的 `pageScope` 互斥、短卡片锚点 `mount/alwaysShow/overlay`）；真页 CDP：`/shorts/<id>` 按钮挂载与菜单、点选下载；首页 Shorts 货架卡片按钮常显、预览播放中按钮命中测试为按钮本身且菜单可开；滑动一条后按钮跟随新 id
 
+### M10 音视频合并下载 ⬜
+模块概要：
+- 职责：把同一视频的画面流与音轨流合并成一个可直接播放的 MP4；编排两路下载、临时存储、输出落盘与失败回退
+- 输入：`MuxPlan`（两路 `DownloadPlan`） / OPFS 临时文件
+- 输出：单个 MP4 文件（一条视频轨 + 一条音轨）
+- 依赖：M2（下载执行）、M6（构建）
+- 被谁依赖：M7.3、M9.3
+
+#### M10.1 fMP4 分片合并 ✅
+- **验收**：`node --test tests/merge.test.mjs` 全绿；合成 fMP4（`ftyp + moov(mvhd, trak, mvex/trex) + moof(traf/tfhd) + mdat`）合并后输出只含一个 `moov`、两条 `trak`（视频 id 1、音频 id 2）、音频 `moof` 的 `tfhd.track_ID` 与 `trex.track_ID` 均为 2、音频与视频的 `sidx/ssix/mfra` 被丢弃，媒体顺序为「视频段 → 音频段」；输出总字节 = 合并头 + 两路媒体（减去被丢弃的索引盒）；非分片 MP4（`moov` 无 `mvex` 或媒体段无 `moof`）报「该流不是分片 MP4，暂不支持合并」
+- **依赖**：无
+
+详细设计：
+- 数据流：读取两路文件头部（≤8 MiB）→ 解析顶层 box → 定位 `ftyp/moov` → 校验（moov 有 `mvex`、恰 1 条 `trak`）→ 生成合并头（视频 `ftyp` + 视频 `moov` 插入音频 `trak` 并把音频 `trex` 并入 `mvex`，全部 track id 补丁）→ 顺序流式复制视频媒体段（跳过 `sidx/ssix/mfra`，`moof` 内 `tfhd` 打补丁）→ 同理复制音频媒体段 → `writable.close()`
+- 接口：`parseBoxes(bytes, start, end): Box[]`；`findBox(bytes, start, end, type): Box|null`；`mergeFmp4Blobs(videoBlob, audioBlob, writable, onProgress): Promise<{bytes, headerBytes, videoBytes, audioBytes}>`；`patchTrackId(bytes, box, id)`
+- 数据结构：`Box { type: string, start: number, end: number, headerSize: number }`；合并档内部记录 `{ header: Uint8Array, videoMediaStart, audioMediaStart, totalBytes }`
+- 算法与规则：box 头为 `size(4) + type(4)`，`size === 1` 时后接 8 字节 `largesize`，`size === 0` 表示到文件尾；视频 `trak` 保留原 id（取最大 id），音频新 id = 最大 id + 1；`tkhd.track_ID` 补丁偏移 v0 为 `start+20`、v1 为 `start+28`，`trex/tfhd.track_ID` 为 `start+12`；`mvhd.next_track_ID` 为 box 末 4 字节，改为新 id + 1；音频 `mvex` 只取 `trex` 并入视频 `mvex`（保留视频其余 `mvex` 子盒）；媒体复制用 `File.slice(start,end).stream()` 分块写，`moof` 整盒读入后补丁再写，`mdat` 直接流式复制；进度的分母取「头 + 两路文件大小」
+- 错误与边界：头部读不到完整 `moov` → 继续扩读直至盒尾（上限 32 MiB）后仍失败 → 报错；`moov` 无 `mvex`、无 `trak`、trak 数 ≠ 1、媒体段无 `moof` → 「该流不是分片 MP4，暂不支持合并」；box 越界/长度为 0 → 「文件不完整」；两路 track id 冲突 → 重新分配；输出写入异常 → 抛给调用方由 M10.2 `abort()`
+- 测试要点：`tests/merge.test.mjs`（合成双流合并结构与字节、索引盒剔除、track id 补丁、非分片拒绝、截断拒绝、进度回调） + 真页 CDP（合并产物在 Chrome 中可直接播放）
+
+#### M10.2 合并下载执行 ✅
+- **验收**：点合并档后只弹一次保存对话框；两路下载分别上报进度；最终落盘一个 MP4，字节数 = 合并头 + 两路媒体之和；任一路 `content-length` 不足 → `writable.abort()`、提示「数据不完整」且不留半成品；临时文件在成功/失败后都被清理；`navigator.storage.getDirectory` 不可用时，两路总字节 ≤ 512 MiB 走内存合并；`showSaveFilePicker` 不可用时同上走 blob（超限则提示不支持）；单路下载行为与 M2.2 完全一致
+- **依赖**：M10.1、M2.2
+
+详细设计：
+- 数据流：`core.onPick` → `download(planPromise, { streamToDisk, suggestedName })` → 同步弹 picker 拿到 `writable` → `await plan` → `plan.merge === "fmp4"` 时走合并：逐路 `downloadPart(part, temp)`（校验 `content-length`）→ 两路写完 → `mergeFmp4Blobs(tempA, tempB, writable, onProgress)` → `close` → toast「✓ 下载完成（已合并）」 → `finally` 清理临时文件
+- 接口：`download(planOrPromise, opts): Promise<boolean>`（对 `MuxPlan` 透明）；内部 `openTemp(name)`（OPFS 优先，返回 `{write, close, abort, file, remove}`）、`downloadPart(plan, sink, onProgress)`、`mergeFmp4Blobs`
+- 数据结构：`MuxPlan` 见 §2.1；临时文件名 `dl-merge-<随机>-v` / `-a`；内存回退用 `Uint8Array[]`
+- 算法与规则：picker 仍在 `await plan` 之前同步打开（保住用户点击激活态）；两路串行下载，进度文案 `下载画面 x%` / `下载音轨 y%`，合并时 `合并中 z%`；OPFS 临时文件用 `navigator.storage.getDirectory().removeEntry(name)` 清理；内存回退上限 512 MiB（两路 `content-length` 之和，超限直接失败）；合并输出写满后 `close()`，任何异常先 `abort()` 再 toast
+- 错误与边界：picker 取消 → 「已取消下载」且不发请求；单路非 2xx / 字节不足 → 中止输出、清理临时、提示具体原因；合并盒解析失败 → 「✗ 合并失败：该流不是分片 MP4，暂不支持合并」；OPFS 临时文件创建失败 → 回落内存（≤512 MiB）；写入中途失败（配额/磁盘）→ 中止输出、清理临时并提示具体原因；无 picker + 超 512 MiB → 「当前浏览器不支持大文件合并下载」
+- 测试要点：`tests/download.test.mjs`（双路合并落盘字节、两路进度、单路截断中止、picker 取消、临时清理、无 OPFS 内存回退） + 浏览器冒烟（真实保存对话框）
+
+#### M10.3 YouTube 合并档位 ✅
+- **验收**：普通视频菜单中，自适应档在同分辨率有 MP4 画面与 AAC 音轨时显示为单条 `Np`（不再拆「画面/音频」），点选后发出两条 `googlevideo` 请求（视频 itag + AAC itag），落成一个可播放 MP4；单文件 360p 仍为单条且不重复；画面只有 WebM/VP9 或没有 AAC 时该档仍显示 `Np 画面（无音轨）`；音频独立条目保留；文件名 `作者_标题_1080p.mp4`
+- **依赖**：M9.1、M9.3、M10.2
+
+详细设计：
+- 数据流：`ytBuildStreams` 先选 AAC 音轨（`audio/mp4` 最高码率）→ 自适应画面按 `qualityLabel` 分组选最优 → 若最优是 `video/mp4` 且有 AAC → 输出 `{ label: qualityLabel, kind: "mux", itag, audioItag }`；否则输出原 `kind: "video"` 拆分条目 → 菜单 → 点选 → `ytResolveDownload` 重取后按 `itag` 与 `audioItag` 各取新链 → `MuxPlan`
+- 接口：`ytBuildStreams(data): Stream[]`；`ytResolveDownload(item, stream): Promise<DownloadPlan | MuxPlan>`；`ytFilename(item, stream)`
+- 数据结构：`Stream { label, url?, itag?, kind: "mux", audioItag }`；`MuxPlan.parts[0]` 带 `Range: bytes=0-`，`parts[1]` 同；两路 `credentials: "omit"`
+- 算法与规则：合并判定只看容器（`mimeType` 以 `video/mp4` 开头）与 AAC 是否存在；渐进单文件 `qualityLabel` 已占用时合并档不再重复；`itag` 重取命中优先于 `label`；音轨重取按 `audioItag`，找不到时退回 `ytBuildStreams` 中最高码率 AAC；文件名扩展名 `.mp4`，label 不含「画面（无音轨）」后缀
+- 错误与边界：视频或音轨任一重取失败 → 有旧链则用旧链；缺音轨 → 回落为仅画面拆分下载并提示；合并失败由 M10.2 统一提示；受限视频沿用 M9.1 文案
+- 测试要点：`tests/youtube.test.mjs`（MP4+AAC 出 `mux` 且带 `audioItag`、VP9 保留拆分、无 AAC 保留拆分、渐进档不重复、`ytResolveDownload` 两路 `MuxPlan`、文件名）；真页 CDP：1080p 合并档两条 `206` 与单文件落盘
+
+#### M10.4 B站合并档位 ✅
+- **验收**：登录态 DASH 档在菜单中显示为单条 `高清 1080P`（不再拆「画面/音频」），点选后请求一次 `playurl` 拿两路 `baseUrl`、发出两条 CDN 请求，落成一个可播放 MP4；音频独立条目保留；`dash.audio` 为空时保留「画面（无音轨）」拆分档；文件名 `作者_标题_高清 1080P.mp4`
+- **依赖**：M7.1、M7.3、M10.2
+
+详细设计：
+- 数据流：`buildBiliDashStreams` 对每个 `qn > durlMax` 分组选画面（优先 AVC）与标准 AAC → 有音轨时输出 `{ label: desc, qn, kind: "mux" }`，无音轨时输出原拆分档 → 菜单 → `biliResolveDownload` 再次请求 `fnval=4048`，按 qn 取画面、按标准 AAC 取音轨 → `MuxPlan`
+- 接口：`buildBiliDashStreams(durlData, dashData): Stream[]`；`biliResolveDownload(item, stream): Promise<DownloadPlan | MuxPlan>`
+- 数据结构：合并档 `{ label, qn, kind: "mux" }`；`MuxPlan.parts` 两路均为 `credentials: "omit"`
+- 算法与规则：codecid 7/12/13（AVC/HEVC/AV1）都是 m4s 分片，容器层可合并；音频用现有 `pickDashAudio`（标准 AAC 优先）；标签不带后缀；`durlMax` 之上才补；`dash.audio` 缺失/非 AAC 时只给拆分画面
+- 错误与边界：playurl 失败 → 「该清晰度不可用」；缺画面或缺音频 → 回落拆分并提示；合并失败由 M10.2 统一提示
+- 测试要点：`tests/bilibili.test.mjs`（合并档标签与 `MuxPlan` 两路、缺音频回落拆分、AVC 优先）；真页 CDP：1080P 合并下载落盘可播放
 ## 5. 不在范围内
 
 - 新平台接入范围：本轮做 **B站详情页**（`/video/BV...`）与 **卡片页**（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）、**小红书**发现页卡片与笔记详情页（`/explore/<id>`、`/discovery/item/<id>`、`/red_video/<id>`，含卡片弹层）、**YouTube** 播放页（`/watch?v=...`）、Shorts（`/shorts/<id>`）与列表卡片（首页 / 搜索结果 / 相关推荐 / Shorts 货架）；B站个人主页、番剧、直播、互动视频不接；小红书搜索页与个人主页需登录、暂不验证，图文笔记无视频可下；YouTube 直播、播放列表、会员/年龄限制视频不接。
-- B站音视频**合并**、分段单文件视频（`durl.length > 1`）、登录/大会员能力绕过不在范围内；1080P 及以上以分离流分别下载（M7.3），合并见待定项 #3。
+- 合并只做**分片 MP4 无损搬箱**：不转码/重编码；WebM/VP9+Opus、FLAC、杜比等不兼容组合保留分离流；B站分段单文件视频（`durl.length > 1`）仍提示不支持。
+- 不做云端 ffmpeg / 下载队列服务；临时数据只落本地 OPFS。
 - 不做 `GM_download`、远程适配下发、独立 UI、常驻后台、MV3 新版本、Web/后端版、签名破解与反爬对抗。
 - `extension/` 仅作回归沙箱，不再发版。
 
@@ -605,10 +681,10 @@ flowchart TD
 | # | 待定 | 谁来定 | 何时必须定 | 影响 |
 |---|---|---|---|---|
 | 2 | 是否在阶段 1 切 `GM_download`（需双脚本或 `@inject-into page` 实测） | bsawang | 接入第二个平台前 | 影响 M2.2 transport，不影响阶段 0 |
-| 3 | B站 1080P 及以上的音视频合并方式（自研 fMP4 remux / 引入库），以及是否并入「下载后处理队列」 | bsawang | 做下载后处理队列时 | 影响 M7.3 产物是否开箱可播；不阻塞分流下载 |
 
 > 原 #1（`@updateURL` / `@downloadURL` 托管地址）已于 2026-10-29 定案：Releases 固定别名，见 §3.6 选型记录。
 > 原 #2 已于 2026-10-31 定案：不切 `GM_download`。长视频落盘走 File System Access（M2.2 / M7.2），抖音继续 blob；`@grant none` 单世界不变。
+> 原 #3（B站/YouTube 分离流如何合并）已于 2026-11-01 定案：自写零依赖 fMP4 box 合并，进 M10；不引入库、不做云端队列。
 
 ## 7. 功能实现调整日志（快道）
 
@@ -652,3 +728,5 @@ flowchart TD
 | 2026-11-01 | 改验收 | M9.2 验收由「hover 出 ⬇」改为「按钮常显 + 预览播放中仍可点」；M9.2 算法补 `alwaysShow` 与预览覆盖层说明 | 用户反馈卡片 hover 预览时下载按钮消失。YouTube 预览由全局层 `#video-preview` 覆盖缩略图，指针进入后卡片不再 `:hover`；按钮常显即可保持可见 |
 | 2026-11-01 | 改详细设计 | §2.2 `AnchorRule` 增加 `overlay?`；kernel 增页面级浮层挂载（`div[data-dl-layer]` + `getBoundingClientRect` 定位 + rAF 合批）；M9.4 Shorts 卡片锚点改 `alwaysShow: true` + `overlay: true` | Shorts 货架卡片常显后仍不可点：容器 `#contents.ytd-rich-shelf-renderer` 带 `transform` 形成层叠上下文，卡内按钮（`z-index: 99999`）在整页层面压不过 `#video-preview`，命中测试落到视频层；挂到页面级固定层才脱离该上下文 |
 | 2026-11-01 | 改详细设计 | M9.4 Shorts 播放页详情锚点 `pos` 由 `top: 12` 改为 `top: 70`；验收补「站点顶部控件行下方」 | Shorts 页顶部 12px 落在站点控件层：`div.player-controls`（`position:absolute; z-index:1`）是 `#shorts-player`（`z-index:0`）的兄弟节点，整层压在播放器之上，按钮即使 `z-index:99999` 也命中到控件；下移到 48px 控件行以下（70px）后命中恢复为按钮 |
+| 2026-11-01 | 新增模块 | 新增 M10「音视频合并下载」及 M10.1–M10.4；§2.1 `Stream.kind` 增加 `'mux'` 与 `audioItag`，新增 `MuxPlan`；§2.2 `resolveDownload` 允许返回 `MuxPlan`；§3.2 新增 `kernel/merge.js`；关闭待定项 #3 | 用户要求下载不再分流。自写零依赖 fMP4 box 合并：实测 dist 72 841 B → 90 498 B（+17 657 B，+24.2%），其中合并器本体 10 297 B；mediabunny 仅 MP4 入口 min 后 405 559 B（gzip 104 412 B）、ffmpeg.wasm ~30 MB，均不适合单脚本。合并只做容器层搬箱，不转码 |
+| 2026-11-01 | 改验收 | M7.3 由「画面/音频两条分别下载」改为「单条合并档 + 音频单条」；M9.1 菜单增加「自适应画面 + AAC 合并档」；M9.3 增加两路 `MuxPlan` 与合并命名；prd 非目标同步 | 合并能力落地后，用户点一个清晰度应得到一个可直接播放的 MP4；不兼容组合仍保留拆分条目 |

@@ -161,15 +161,17 @@ test("ytCardTitle 依次尝试标题选择器", () => {
   assert.equal(ytCardTitle({ querySelector: () => null }), "");
 });
 
-test("ytBuildStreams 单文件带音轨、自适应按分辨率分组且优先 H.264", () => {
+test("ytBuildStreams 单文件带音轨、自适应 MP4 与 AAC 合成合并档且优先 H.264", () => {
   const streams = ytBuildStreams(player);
   assert.deepEqual(
     streams.map((s) => s.label),
-    ["1440p 画面（无音轨）", "1080p 画面（无音轨）", "360p", "音频 129kbps"]
+    ["1440p", "1080p", "360p", "音频 129kbps"]
   );
-  const p1080 = streams.find((s) => s.label === "1080p 画面（无音轨）");
+  const p1080 = streams.find((s) => s.label === "1080p");
   assert.equal(p1080.itag, 137);
-  assert.equal(p1080.kind, "video");
+  assert.equal(p1080.kind, "mux");
+  assert.equal(p1080.audioItag, 140);
+  assert.equal(p1080.audioUrl, "https://rr1.example.com/a140");
   assert.equal(p1080.url, "https://rr1.example.com/v137");
   const progressive = streams.find((s) => s.label === "360p");
   assert.equal(progressive.itag, 18);
@@ -178,6 +180,34 @@ test("ytBuildStreams 单文件带音轨、自适应按分辨率分组且优先 H
   const audio = streams.find((s) => s.kind === "audio");
   assert.equal(audio.itag, 140);
   assert.equal(audio.label, "音频 129kbps");
+});
+
+test("ytBuildStreams WebM/VP9 或无 AAC 时保留拆分画面", () => {
+  const vp9 = clone(player);
+  vp9.streamingData.adaptiveFormats = [
+    vp9.streamingData.adaptiveFormats.find((f) => f.itag === 248),
+    vp9.streamingData.adaptiveFormats.find((f) => f.itag === 140),
+  ];
+  assert.deepEqual(
+    ytBuildStreams(vp9).map((s) => [s.label, s.kind]),
+    [
+      ["1080p 画面（无音轨）", "video"],
+      ["360p", undefined],
+      ["音频 129kbps", "audio"],
+    ]
+  );
+  const noAudio = clone(player);
+  noAudio.streamingData.formats = [];
+  noAudio.streamingData.adaptiveFormats = noAudio.streamingData.adaptiveFormats.filter(
+    (f) => !/^audio\//.test(f.mimeType)
+  );
+  assert.deepEqual(
+    ytBuildStreams(noAudio).map((s) => [s.label, s.kind]),
+    [
+      ["1440p 画面（无音轨）", "video"],
+      ["1080p 画面（无音轨）", "video"],
+    ]
+  );
 });
 
 test("ytBuildStreams 跳过无 url / 无 label 的条目", () => {
@@ -360,9 +390,31 @@ test("ytResolveDownload 节点不可达时换 mn 里的节点", async () => {
   });
   try {
     const stream = ytBuildStreams(fresh).find((s) => s.itag === 137);
+    assert.equal(stream.kind, "mux");
     const item = ytParsePlayer(fresh, ID);
     const plan = await ytResolveDownload(item, stream);
-    assert.match(plan.url, /rr2---sn-bbb\.googlevideo\.com/);
+    assert.match(plan.parts[0].url, /rr2---sn-bbb\.googlevideo\.com/);
+  } finally {
+    mock.restore();
+    restoreCfg();
+  }
+});
+
+test("ytResolveDownload 合并档返回画面 + 音轨两路新链", async () => {
+  const restoreCfg = withYtcfg("K");
+  const fresh = clone(player);
+  fresh.streamingData.adaptiveFormats.find((f) => f.itag === 137).url = "https://rr2.example.com/v137fresh";
+  fresh.streamingData.adaptiveFormats.find((f) => f.itag === 140).url = "https://rr2.example.com/a140fresh";
+  const mock = mockFetch(() => ok(fresh));
+  try {
+    const stream = ytBuildStreams(player).find((s) => s.label === "1080p");
+    const plan = await ytResolveDownload(ytParsePlayer(player, ID), stream);
+    assert.equal(plan.merge, "fmp4");
+    assert.equal(plan.parts.length, 2);
+    assert.equal(plan.parts[0].url, "https://rr2.example.com/v137fresh");
+    assert.equal(plan.parts[1].url, "https://rr2.example.com/a140fresh");
+    assert.deepEqual(plan.parts[0].headers, { Range: "bytes=0-" });
+    assert.match(plan.filename, /测试作者_测试视频_1080p\.mp4$/);
   } finally {
     mock.restore();
     restoreCfg();
