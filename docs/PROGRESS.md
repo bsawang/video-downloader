@@ -37,6 +37,7 @@
   - 观察字节数时把 `showSaveFilePicker` 换成内存 writer（页面内测试桩），收点后删除测试桩并 reload 复原原生保存对话框
   - 抖音回归：`__dlStats` 与按钮数正常（kernel 未改动）
 - 构建：`npm run build` → `dist/douyin.user.js` **33 569 B（30.7 KB）**，`node --check` 通过，头 `@version 0.9.0`
+- 发版：`gh release create v0.9.0`（资产 `douyin.user.js` + `video-downloader-v0.5.3.crx` + `.zip`）；`releases/latest` → `v0.9.0`；固定别名拉取 `200`、33 569 B、`@version 0.9.0`，sha256 `aac0417a…050` 与 GitHub 资产 digest 及本地 `dist/` 全等
 - 未覆盖：合流未做（待定项 #3）；大会员档（qn 112）不可达是平台策略；分段单文件视频仍拒
 
 ## v0.8.0 ✅ {spec §M7 · B站详情页}
