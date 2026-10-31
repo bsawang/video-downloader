@@ -25,6 +25,11 @@ function sideCss(pos, fallback) {
   return css || fallback;
 }
 
+// 按钮继承站点字体，小红书正文栈把 emoji 字体排在前面，⬇ 会被渲染成彩色 emoji；
+// 这里钉死纯文本栈（含 Symbols 字体才画得出 ⬇），保持原来的单色箭头
+const FONT = 'font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",' +
+  '"Segoe UI Symbol","Apple Symbols","Noto Sans Symbols 2",sans-serif;';
+
 export function createButton(item, { isDetail, onPick, onOpen, iconRight, pos }) {
   const btn = document.createElement("button");
   btn.setAttribute("data-dl-icon", "1");
@@ -32,11 +37,11 @@ export function createButton(item, { isDetail, onPick, onOpen, iconRight, pos })
   btn.title = (item.title || "").slice(0, 30);
   // text-indent:0：站点有 [title^=「] 之类的规则，会把带 title 的按钮按标题排缩进
   btn.style.cssText = isDetail
-    ? "position:absolute;" + sideCss(pos, "right:16px;bottom:16px;") + "z-index:99999;text-indent:0;" +
+    ? "position:absolute;" + sideCss(pos, "right:16px;bottom:16px;") + "z-index:99999;text-indent:0;" + FONT +
       "background:rgba(47,107,255,.95);color:#fff;border:none;border-radius:10px;" +
       "padding:10px 18px;font-size:15px;font-weight:600;cursor:pointer;" +
       "box-shadow:0 3px 10px rgba(0,0,0,.4);"
-    : "position:absolute;top:8px;right:8px;z-index:99999;text-indent:0;" +
+    : "position:absolute;top:8px;right:8px;z-index:99999;text-indent:0;" + FONT +
       "background:rgba(47,107,255,.92);color:#fff;border:none;border-radius:8px;" +
       "padding:5px 10px;font-size:13px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.35);";
   btn.style.display = "none";
@@ -68,7 +73,7 @@ export function openPopover(anchorEl, item, onPick) {
   pop.style.cssText =
     "position:fixed;z-index:999999;background:#1f2937;color:#f3f4f6;" +
     "border-radius:10px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.5);" +
-    "font-size:13px;min-width:150px;font-family:system-ui,sans-serif;";
+    "font-size:13px;min-width:150px;" + FONT;
   const popW = 165;
   let left = rect.right - popW;
   if (left < 8) left = 8;

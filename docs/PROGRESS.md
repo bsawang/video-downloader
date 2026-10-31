@@ -26,6 +26,24 @@
 | M8.2 | ✅ | 批次 5 |
 | M8.3 | ✅ | 批次 5 |
 
+## 快道 v0.11.1 ✅ {spec §7 · 按钮箭头被渲染成彩色 emoji}
+- 缺陷（用户反馈）：小红书页面的下载按钮箭头变成彩色 emoji 图标，不是原来的单色箭头
+- 定位：
+  - 字符本身没换过，一直是 `⬇`（U+2B07，Emoji_Presentation=Yes），自 v0.5.3 起未改
+  - 按钮没设 `font-family`，继承站点正文：小红书 `<body>` 栈把 `"Apple Color Emoji"/"Segoe UI Emoji"/"Noto Color Emoji"` 排在 `system-ui` 之后，命中的 emoji 字体接管该码位 → 彩色；B站/抖音正文栈无 emoji 字体，故一直是单色
+  - canvas 像素实测（13px×8）：旧栈 ink 13 689 / color 10 084；钉死纯文本栈 ink 1 301 / color 0
+- 改动：
+  - `src/kernel/ui.js`：新增 `FONT` 纯文本字体栈（`system-ui, Segoe UI, Roboto, PingFang SC, Microsoft YaHei, Segoe UI Symbol, Apple Symbols, Noto Sans Symbols 2, sans-serif`，不含任何 emoji 字体），详情与卡片两套按钮 `cssText` 与档位弹层容器都拼上（弹层原为 `system-ui,sans-serif`）；`textContent` 保持 `⬇` / `⬇ 下载`
+  - 版本 0.11.0 → **0.11.1**；无 Mx.y 与验收判据变化
+- 单测：`npm test` **75 pass / 0 fail**
+- 真页收点（CDP 注入 0.11.1 等价构建，新旧按钮用 `data-old` 区分）：
+  - 小红书 `/red_video`：20 张视频卡各出新按钮，`computed font-family` 为新栈；hover 揭示 → 新按钮 27.1×24.9 @1756,532、`elementFromPoint` 命中按钮本身；6 倍放大截图（`captureScreenshot` clip）为白色单色箭头
+  - 字体对照探针（同一 canvas 五个栈 56px，页面截图）：旧小红书栈画彩色 emoji；旧 B站栈、新栈、`Segoe UI Symbol`、`Microsoft YaHei` 四者均为同形单色箭头 → 新栈与用户此前在 B站/抖音看到的箭头一致
+  - B站详情页 `BV1ecnb6oEnt`：注入后 `⬇ 下载` 按钮 78.7×35 @1081,184，`font-family` 为新栈；截图 `H:/temp/bili-detail-btn.png` 为白色单色箭头 + 「下载」
+  - B站首页卡片：注入后点开档位弹层，`computed font-family` 为新栈，4 行 `⬇ 高清 1080P 画面（无音轨）/ 高清 1080P 音频 / 高清 720P / 流畅 360P`，截图 `H:/temp/menu-mono.png` 箭头全为单色
+- 构建：`npm run build` → `dist/douyin.user.js` **52 661 B**，`@version 0.11.1`，sha256 `c591d0b0…7fd8`
+- 未覆盖：macOS 下的 `Apple Symbols` / `Noto Sans Symbols 2` 兜底未实测；小红书登录态丢失后无法复验卡片点击（未登录时卡片无令牌，点按钮不出菜单，与本次改动无关）；按钮宽度因去掉 emoji 宽字形而略窄（27.1 vs 37.9，详情 78.7 vs 91）
+
 ## v0.11.0 ✅ {spec §M8 · 小红书平台接入}
 - 需求：继续增加小红书（M8.1 详情页 / M8.2 卡片页 / M8.3 直链现取）
 - 调研（未登录真页 + 页面状态实证）：
