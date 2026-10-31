@@ -34,6 +34,23 @@
 | M10.3 | ✅ | 批次 8 |
 | M10.4 | ✅ | 批次 8 |
 
+## v0.14.3 ✅ {spec §M9.3 · 直链 HEAD 探测 + 签名重取，修「下载报错 / 数据不完整」}
+- 缺陷 / 需求（用户反馈）：「网址标记不安全；之前可以下载时下载速度很慢，现在下载链接报错」
+- 根因（两条独立，均已实测复现）：
+  - **HTTP 缓存污染**：直链预探用 `GET + Range: bytes=0-1`，浏览器把「2 字节」的分段响应写成缓存条目；紧接着同一条链的整段下载（`Range: bytes=0-`）命中该条目，只读到 2 B 就结束，`content-length` 却是整份 →「✗ 下载失败：数据不完整（2/17936842 字节）」。复现：`probe → 206 cl=2 n=2`，`dl → 206 cl=17936842 n=2`
+  - **签名偶发失效**：同一网络下 InnerTube 约 25% 的响应下发被 googlevideo 拒绝的签名（403 / Failed to fetch），同一条链重试无效；12 次重复测量呈「同链两次都失败 / 两次都成功」的成对分布，`ip` 字段稳定
+- 实现：
+  - [src/platforms/youtube/adapter.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/adapter.js)：`ytPickReachable` 改为 `HEAD` + `cache: "no-store"`（不发正文、不留缓存；`405/501` 视为可达，个别边缘节点不支持 HEAD）；`ytResolveDownload` 改为「4 轮 × 3 client」循环，取到新链先过 `ytProbePlan`（画面/音轨都探通才算可用），被拒就整份重取响应，被风控的 client 记入 `dead` 直接跳过；菜单旧链也须探测通过才用，全部不通报「YouTube 直链被拒绝，请刷新页面后重试」
+  - 同文件：新增 `ytFetchTimeout`（取档 15s / 探测 8s `AbortController` 超时，代理链路挂住不再卡死）；`ytPlayerOnce` 走超时封装
+  - [tests/youtube.test.mjs](file:///E:/work/ai/video-downloader/tests/youtube.test.mjs)：断言全部被拒时抛错（不再退回坏旧链）、首个 client 被风控时改用后续 client 的链、首次 403 后第 4 轮重取到好链
+- 单测：`npm test` **120 pass / 0 fail**
+- 真页收点（用户 Chrome，TM 已装 0.14.3 构建，`tools/devserve.mjs` 8765 分发）：
+  - 正常视频 `dQw4w9WgXcQ` 360p 合并档：player 调用 `["VISIONOS"]`，探测为 `HEAD rr2---sn-oji3b5-5n.googlevideo.com` 等；进度正常推进到 **✓ 下载完成（已合并）**，落盘 **11 839 345 B**（与 `content-length` 相等），无「数据不完整」
+  - 风控视频 `UZKde6p1Avk`（`Sign in to confirm you're not a bot`）：player 调用 `["VISIONOS","IOS","ANDROID_VR","IOS","IOS","IOS"]`，10 次 `HEAD` 探测全部被拒、0 B 落盘并 abort，toast 为 **✗ 下载失败：Error: YouTube 直链被拒绝，请刷新页面后重试**（不再静默产出残缺文件）
+- 「网址标记不安全」：排查为该轮调试用 CDP 打开过 `Security.setIgnoreCertificateErrors`，Chrome 对 youtube.com 记录 `insecure-broken / ran-content-with-cert-error`（证书本身有效：`*.google.com`、签发者 WE2）。已回置 `{ignore:false}`；该设置只存在于浏览器运行时，`Preferences` / `Local State` 均无持久化项，Chrome 重启后失效，未再启用
+- 构建：`npm run build` → `dist/douyin.user.js` **93 266 B**，`node --check` 通过，`@version 0.14.3`，sha256 `28fec87f03d07eb3ed9cc0879e5b0b6afa636ed3db55eb78d1f6ad23636a0feb`
+- 发版：release v0.14.3 挂 `douyin.user.js` + `video-downloader-v0.5.3.crx/.zip`；固定别名 → `200`、93 266 B、`@version 0.14.3`，sha256 与本地全等（`28fec87f…feb`）；`releases/latest` → `v0.14.3`
+
 ## v0.14.2 ✅ {spec §M9.1/M9.3/M10.3 · VISIONOS 取流 + 容器优先选流}
 - 缺陷 / 需求（用户反馈）：
   - 1080p 以上出现「Np 画面（无音轨）」+ 独立音频，1440p/2160p 明明有 AV1 MP4 却选成 VP9 WebM 而无法合并
