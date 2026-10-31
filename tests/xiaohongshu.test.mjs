@@ -167,6 +167,19 @@ test("xhsStateFromHtml 解析内联状态（含未加引号的 undefined）", ()
   assert.equal(xhsStateFromHtml('<script>window.__INITIAL_STATE__={"a":1}'), null);
 });
 
+test("xhsStateFromHtml 兼容 new Map/Set 字面量（登录态笔记页的 tailMap）", () => {
+  const html =
+    '<html><script>window.__INITIAL_STATE__={"note":{"noteDetailMap":{"' +
+    NOTE_ID +
+    '":{"note":{"type":"video","video":{"media":{"stream":{"EF4":[{"width":720,"height":1280,' +
+    '"masterUrl":"http://sns-video-v6.xhscdn.com/a.mp4?sign=1"}]}}}}}}},"tailMap":new Map([]),' +
+    '"tags":new Set(["a","b"])}</script></html>';
+  const state = xhsStateFromHtml(html);
+  assert.equal(state.note.noteDetailMap[NOTE_ID].note.type, "video");
+  assert.deepEqual(state.tailMap, {});
+  assert.deepEqual(state.tags, ["a", "b"]);
+});
+
 test("xhsCardToken/xhsCardTitle/xhsCardAuthor 从卡片 DOM 取占位信息", () => {
   const card = fakeCard({ token: "ABtok=", title: "卡片标题", author: "卡片作者" });
   assert.equal(xhsCardToken(card), "ABtok=");
@@ -275,7 +288,7 @@ test("xhsLoadNote 并发同一笔记只发一次请求", async () => {
   }
 });
 
-test("xhsLoadNote 失败可重试，页面状态就绪时不发请求", async () => {
+test("xhsLoadNote 失败可重试；页面状态可用时 HTML 取不到也返回页面档位", async () => {
   const restore = withState(undefined);
   const realFetch = globalThis.fetch;
   let calls = 0;
@@ -296,7 +309,7 @@ test("xhsLoadNote 失败可重试，页面状态就绪时不发请求", async ()
   const restore2 = withState({ note: { noteDetailMap: { [NOTE_ID]: { note } } } });
   const realFetch2 = globalThis.fetch;
   globalThis.fetch = async () => {
-    throw new Error("should not fetch");
+    throw new Error("offline");
   };
   try {
     const store = createStore();
@@ -308,7 +321,58 @@ test("xhsLoadNote 失败可重试，页面状态就绪时不发请求", async ()
   }
 });
 
-test("xhsRefresh 把 noteDetailMap 里的视频笔记写进 store，每个 id 只写一次", async () => {
+test("xhsLoadNote 用笔记页 HTML 补齐页面状态缺的档位（弹层里只列了当前档）", async () => {
+  const partial = {
+    ...note,
+    video: {
+      media: {
+        stream: {
+          EF4: [{ width: 720, height: 1280, avgBitrate: 3434770, masterUrl: "https://cdn/live-720.mp4" }],
+        },
+      },
+    },
+  };
+  const full = {
+    ...note,
+    video: {
+      media: {
+        stream: {
+          EF4: [{ width: 720, height: 1280, avgBitrate: 3434770, masterUrl: "https://cdn/html-720.mp4" }],
+          EF5: [
+            { width: 1080, height: 1920, avgBitrate: 2023682, masterUrl: "https://cdn/html-1080.mp4" },
+            { width: 1440, height: 2560, avgBitrate: 3544871, masterUrl: "https://cdn/html-1440.mp4" },
+            { width: 2160, height: 3840, avgBitrate: 6590211, masterUrl: "https://cdn/html-2160.mp4" },
+          ],
+        },
+      },
+    },
+  };
+  const restore = withState({ note: { noteDetailMap: { [NOTE_ID]: { note: partial } } } });
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return mockNoteHtml(full);
+  };
+  try {
+    const store = createStore();
+    const item = await xhsLoadNote(NOTE_ID, store);
+    assert.equal(calls, 1);
+    assert.deepEqual(
+      item.streams.map((s) => s.label),
+      ["2160p", "1440p", "1080p", "720p"]
+    );
+    assert.equal(item.streams[3].url, "https://cdn/live-720.mp4");
+    assert.equal(store.get(NOTE_ID).__xhsFull, true);
+    await xhsLoadNote(NOTE_ID, store);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+    restore();
+  }
+});
+
+test("xhsRefresh 把 noteDetailMap 里的视频笔记写进 store，补全过的 id 不再请求", async () => {
   const restore = withState({
     note: {
       noteDetailMap: {
@@ -318,21 +382,29 @@ test("xhsRefresh 把 noteDetailMap 里的视频笔记写进 store，每个 id �
       },
     },
   });
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return mockNoteHtml(note);
+  };
   try {
     const store = createStore();
     let writes = 0;
     store.onChange(() => writes++);
     await xhsRefresh(store);
     await xhsRefresh(store);
+    assert.equal(calls, 1);
     assert.equal(writes, 1);
     assert.equal(store.get(NOTE_ID).streams.length, 2);
     assert.equal(store.size, 1);
   } finally {
+    globalThis.fetch = realFetch;
     restore();
   }
 });
 
-test("xhsResolveDownload 点选时重取新链，取不到退回菜单里的旧链", async () => {
+test("xhsResolveDownload 点选时重取新链，页面状态缺档时按笔记页 HTML 取，取不到退回旧链", async () => {
   const item = { videoId: NOTE_ID, title: "t", author: "up", streams: [] };
   const restore = withState({ note: { noteDetailMap: { [NOTE_ID]: { note } } } });
   try {
@@ -342,6 +414,28 @@ test("xhsResolveDownload 点选时重取新链，取不到退回菜单里的旧�
     assert.equal(plan.filename, "up_t_1080p.mp4");
   } finally {
     restore();
+  }
+
+  const partial = {
+    ...note,
+    video: {
+      media: {
+        stream: {
+          EF4: [{ width: 720, height: 1280, avgBitrate: 3434770, masterUrl: "https://cdn/live-720.mp4" }],
+        },
+      },
+    },
+  };
+  const restore3 = withState({ note: { noteDetailMap: { [NOTE_ID]: { note: partial } } } });
+  const realFetch3 = globalThis.fetch;
+  globalThis.fetch = async () =>
+    mockNoteHtml({ ...partial, video: { media: { stream: { EF5: [{ width: 2160, height: 3840, avgBitrate: 6590211, masterUrl: "https://cdn/html-2160.mp4" }] } } } });
+  try {
+    const plan = await xhsResolveDownload(item, { label: "2160p", url: "https://cdn/old-2160.mp4" });
+    assert.equal(plan.url, "https://cdn/html-2160.mp4");
+  } finally {
+    globalThis.fetch = realFetch3;
+    restore3();
   }
 
   const restore2 = withState(undefined);
@@ -384,7 +478,7 @@ test("xiaohongshuAdapter 暴露卡片现取钩子，且不带 SSR/perf 网络源
   assert.equal(xiaohongshuAdapter.streamToDisk, undefined);
 });
 
-test("xhsPrefetch 已有档位时不再请求", async () => {
+test("xhsPrefetch 补全过的档位不再请求，未补全的会补一次", async () => {
   const realFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => {
@@ -393,10 +487,23 @@ test("xhsPrefetch 已有档位时不再请求", async () => {
   };
   try {
     const store = createStore();
-    store.upsert({ videoId: NOTE_ID, title: "t", author: "a", streams: [{ label: "720p", url: "u" }] });
+    store.upsert({
+      videoId: NOTE_ID,
+      title: "t",
+      author: "a",
+      streams: [{ label: "720p", url: "u" }],
+      __xhsFull: true,
+    });
     xhsPrefetch(NOTE_ID, store);
     await new Promise((r) => setTimeout(r, 0));
     assert.equal(calls, 0);
+
+    const store2 = createStore();
+    store2.upsert({ videoId: NOTE_ID, title: "t", author: "a", streams: [{ label: "720p", url: "u" }] });
+    xhsPrefetch(NOTE_ID, store2);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(calls, 1);
+    assert.equal(store2.get(NOTE_ID).streams.length, 2);
   } finally {
     globalThis.fetch = realFetch;
   }

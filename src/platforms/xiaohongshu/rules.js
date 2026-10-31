@@ -114,8 +114,28 @@ export function xhsCardAuthor(el) {
 
 const STATE_MARK = "window.__INITIAL_STATE__=";
 
-// 页面 HTML 里的状态是 JS 字面量：夹着未加引号的 undefined，不是严格 JSON。
-// 先按严格 JSON 解，失败后再把值位置上的裸字面量换成 null 重试（字符串内部已被引号包住，不受影响）。
+// 页面 HTML 里的状态是 JS 字面量，不是严格 JSON：值位置上会有裸 undefined/NaN，
+// 登录态还会夹带 new Map([])（如 tailMap）。先按严格 JSON 解，失败再宽松化重试。
+function xhsFixStateLiterals(raw) {
+  return raw
+    .replace(/:(undefined|NaN|-?Infinity)(?=\s*[,}\]])/g, ":null")
+    .replace(/new Map\((\[[\s\S]*?\])\)/g, (m, arr) => {
+      try {
+        return JSON.stringify(Object.fromEntries(JSON.parse(arr)));
+      } catch (e) {
+        return "{}";
+      }
+    })
+    .replace(/new Set\((\[[\s\S]*?\])\)/g, (m, arr) => {
+      try {
+        JSON.parse(arr);
+        return arr;
+      } catch (e) {
+        return "[]";
+      }
+    });
+}
+
 export function xhsStateFromHtml(html) {
   const text = String(html || "");
   const i = text.indexOf(STATE_MARK);
@@ -128,7 +148,7 @@ export function xhsStateFromHtml(html) {
     return JSON.parse(raw);
   } catch (e) {}
   try {
-    return JSON.parse(raw.replace(/:(undefined|NaN|-?Infinity)(?=\s*[,}\]])/g, ":null"));
+    return JSON.parse(xhsFixStateLiterals(raw));
   } catch (e) {
     return null;
   }
