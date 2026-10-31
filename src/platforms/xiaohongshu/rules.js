@@ -3,7 +3,8 @@
 // 卡片页只有笔记 id 与 xsec_token，档位要按需再取（见 adapter）。
 import { sortStreams } from "../../kernel/extract.js";
 
-const NOTE_PATH = /^\/(?:explore|discovery\/item)\/([0-9A-Za-z]{24})/;
+// red_video 是 /red_video 栏目打开笔记时的路径（xsec_source=pc_dual_feed）
+const NOTE_PATH = /^\/(?:explore|discovery\/item|red_video)\/([0-9A-Za-z]{24})/;
 
 export function xhsNoteIdFromPath(pathname) {
   const m = String(pathname || "").match(NOTE_PATH);
@@ -177,7 +178,7 @@ export const xhsRules = {
           : null;
       },
       kind: "detail",
-      pageScope: /^\/(?:explore|discovery\/item)\/[0-9A-Za-z]{24}/,
+      pageScope: /^\/(?:explore|discovery\/item|red_video)\/[0-9A-Za-z]{24}/,
       mount: [".player-container", ".media-container", "self"],
       // 播放器控件都在底部，右上角留空；按钮放播放器右上角
       pos: { top: 12, right: 12 },

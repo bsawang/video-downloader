@@ -79,7 +79,9 @@ const note = {
 test("xhsNoteIdFromPath 只认笔记详情路径，发现页返回 null", () => {
   assert.equal(xhsNoteIdFromPath(`/explore/${NOTE_ID}`), NOTE_ID);
   assert.equal(xhsNoteIdFromPath(`/discovery/item/${NOTE_ID}`), NOTE_ID);
+  assert.equal(xhsNoteIdFromPath(`/red_video/${NOTE_ID}`), NOTE_ID);
   assert.equal(xhsNoteIdFromPath("/explore"), null);
+  assert.equal(xhsNoteIdFromPath("/red_video"), null);
   assert.equal(xhsNoteIdFromPath(`/search_result?keyword=${NOTE_ID}`), null);
 });
 
@@ -200,7 +202,9 @@ test("xhsRules 覆盖 www 全站：一条详情 + 一条卡片规则，详情按
   assert.deepEqual(detail.pos, { top: 12, right: 12 });
   assert.equal(detail.pageScope.test(`/explore/${NOTE_ID}`), true);
   assert.equal(detail.pageScope.test(`/discovery/item/${NOTE_ID}`), true);
+  assert.equal(detail.pageScope.test(`/red_video/${NOTE_ID}`), true);
   assert.equal(detail.pageScope.test("/explore"), false);
+  assert.equal(detail.pageScope.test("/red_video"), false);
   const card = xhsRules.anchors.find((a) => a.kind === "card");
   assert.equal(card.selector, ".note-item");
   assert.equal(card.idFrom(fakeCard({ play: false })), null);
