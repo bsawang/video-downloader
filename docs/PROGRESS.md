@@ -26,6 +26,24 @@
 | M8.2 | ✅ | 批次 5 |
 | M8.3 | ✅ | 批次 5 |
 
+## 快道 v0.11.4 ✅ {spec §7 · 弹层按钮延迟出现}
+- 缺陷（用户反馈）：小红书播放弹窗的下载按钮出现慢，要等一会儿才挂上
+- 定位（弹层实测时间线，相对点击卡片）：
+  - 点击 → 地址栏切换 +7 ms → `#noteContainer` / `.player-container` +173 ms → **视频 `<video>` +2574 ms**
+  - 0.11.3 的 DOM 兜底等 `<video>` 出现才认视频笔记；而 kernel 的变更防抖是纯 debounce，页面重绘（播放器分步插入）会不断重置 300 ms 计时 → 按钮要等整段重绘停下来
+  - 修复前按钮在地址栏切换后约 **986 ms** 才出现
+- 改动：
+  - [src/platforms/xiaohongshu/rules.js:175](file:///E:/work/ai/video-downloader/src/platforms/xiaohongshu/rules.js#L175) DOM 兜底改认 `.player-container / .video-player-media / video`——播放器容器与弹层同刻插入，不再等视频节点；图文弹层只有 `.media-container.swiper`，仍不挂
+  - [src/kernel/core.js:23](file:///E:/work/ai/video-downloader/src/kernel/core.js#L23) `scheduleRender` 由 300 ms 纯防抖改为 200 ms 节流（首次变更固定间隔渲染，期间变更排下一轮，不再被连续重绘饿死）
+  - 版本 0.11.3 → **0.11.4**；无 Mx.y 与验收判据变化
+- 单测：`npm test` **78 pass / 0 fail**（详情锚点用例补 `.player-container` 命中与图文 `.swiper` 不命中）
+- 真页收点（CDP 注入 0.11.4，弹层路径 `6ac0fdfe…`）：
+  - 新时间线（相对点击）：`pushState +7 ms` → 容器/播放器 `+173 ms` → **按钮 `+278 ms`**；`<video>` 到 `+2574 ms` 才出现，已与按钮挂载无关
+  - 按钮在 `.player-container` 上、`data-dl-hover=1`；点开菜单 `⬇ 1080p / 720p`，标题取到笔记真实标题
+  - B站首页注入同一构建：21/21 锚点挂载，静置 4 s 后仍 21/21（无重复挂载/抖动）
+- 构建：`npm run build` → `dist/douyin.user.js` **55 603 B**，`@version 0.11.4`，sha256 `a06d2986…62fc`
+- 发版：release v0.11.4 挂同名资产；固定别名 → `200`、55 603 B、`@version 0.11.4`，sha256 与本地全等
+
 ## 快道 v0.11.3 ✅ {spec §7 · 小红书播放弹窗按钮消失}
 - 缺陷（用户反馈）：小红书播放弹窗（从发现页点卡片打开的 `#noteContainer`）里没有下载按钮
 - 定位：
