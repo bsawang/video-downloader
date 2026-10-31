@@ -51,6 +51,7 @@
   - 可播放：`duration 213.089524s`、`3840×2160`、`readyState 4`；`play()` 后 `currentTime 1.085s`、`paused:false`
   - 清理：完成后 OPFS 仅剩验证输出，`dl-merge-*` 无残留（测试前手动清掉了旧版本遗留的 2 个临时文件）
 - 构建：`npm run build` → `dist/douyin.user.js` **90 743 B**（0.14.1 90 330 B，+413 B），`node --check` 通过，`@version 0.14.2`，sha256 `b5a411fec994dc1d63e070dfc73bbb625a677020cf9cc5efb089bcd71fac2840`
+- 发版：release v0.14.2 挂 `douyin.user.js` + `video-downloader-v0.5.3.crx/.zip`；固定别名 → `200`、90 743 B、`@version 0.14.2`，sha256 与本地全等；`releases/latest` → `v0.14.2`
 
 ## v0.14.1 ✅ {spec §M7.3/M9.1/M9.3/M10.3/M10.4 · 可合并档位不再列独立音频}
 - 需求（用户反馈）：能合流的档位不必再列音频链接，只有不能合流的组合才分流显示
