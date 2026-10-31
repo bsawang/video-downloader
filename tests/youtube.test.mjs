@@ -375,7 +375,7 @@ test("ytLoadVideo 拒绝非法 id", async () => {
   await assert.rejects(ytLoadVideo("short", createStore()), /缺少视频 id/);
 });
 
-test("ytResolveDownload 按 label 取新链，失败退回菜单旧链", async () => {
+test("ytResolveDownload 按 label 取新链，全部被拒时报错", async () => {
   const restoreCfg = withYtcfg("K");
   const fresh = clone(player);
   fresh.streamingData.formats[0].url = "https://rr2.example.com/fresh18";
@@ -399,9 +399,8 @@ test("ytResolveDownload 按 label 取新链，失败退回菜单旧链", async (
     );
     const stream = ytBuildStreams(split).find((s) => s.kind === "audio");
     const item = ytParsePlayer(split, ID);
-    const plan = await ytResolveDownload(item, stream);
-    assert.equal(plan.url, "https://rr1.example.com/a140");
-    assert.match(plan.filename, /音频 129kbps\.m4a$/);
+    // 菜单旧链也探不通时不再硬着头皮下载，交给 UI 报错
+    await assert.rejects(ytResolveDownload(item, stream), /直链被拒绝/);
   } finally {
     mock.restore();
     restoreCfg();
@@ -414,7 +413,7 @@ test("ytResolveDownload 无可用直链时抛错", async () => {
   try {
     await assert.rejects(
       ytResolveDownload({ videoId: ID }, { label: "1080p 画面（无音轨）", itag: 137 }),
-      /该清晰度不可用/
+      /直链被拒绝/
     );
   } finally {
     mock.restore();
@@ -438,6 +437,60 @@ test("ytResolveDownload 节点不可达时换 mn 里的节点", async () => {
     const item = ytParsePlayer(fresh, ID);
     const plan = await ytResolveDownload(item, stream);
     assert.match(plan.parts[0].url, /rr2---sn-bbb\.googlevideo\.com/);
+  } finally {
+    mock.restore();
+    restoreCfg();
+  }
+});
+
+test("ytResolveDownload 首次直链被 403 时重取一份新链", async () => {
+  const restoreCfg = withYtcfg("K");
+  let round = 0;
+  const bad = clone(player);
+  bad.streamingData.adaptiveFormats.find((f) => f.itag === 137).url = "https://rr1.example.com/bad137";
+  bad.streamingData.adaptiveFormats.find((f) => f.itag === 140).url = "https://rr1.example.com/bad140";
+  const good = clone(player);
+  good.streamingData.adaptiveFormats.find((f) => f.itag === 137).url = "https://rr2.example.com/good137";
+  good.streamingData.adaptiveFormats.find((f) => f.itag === 140).url = "https://rr2.example.com/good140";
+  const blocked = ok({ playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Sign in to confirm you’re not a bot" } });
+  const mock = mockFetch((url) => {
+    if (/youtubei\/v1\/player/.test(url)) {
+      round += 1;
+      if (round === 1) return ok(bad);
+      if (round === 4) return ok(good);
+      return blocked;
+    }
+    if (/bad/.test(url)) return { ok: false, status: 403, json: async () => ({}) };
+    return { ok: true, status: 206, json: async () => ({}) };
+  });
+  try {
+    const stream = ytBuildStreams(bad).find((s) => s.label === "1080p");
+    const plan = await ytResolveDownload(ytParsePlayer(bad, ID), stream);
+    assert.equal(round, 4, "首份响应的签名取不到数据，其余 client 被风控后应重取一份");
+    assert.equal(plan.parts[0].url, "https://rr2.example.com/good137");
+    assert.equal(plan.parts[1].url, "https://rr2.example.com/good140");
+  } finally {
+    mock.restore();
+    restoreCfg();
+  }
+});
+
+test("ytResolveDownload 首个 client 被风控时用后面 client 的链", async () => {
+  const restoreCfg = withYtcfg("K");
+  const fresh = clone(player);
+  fresh.streamingData.adaptiveFormats.find((f) => f.itag === 137).url = "https://rr2.example.com/ios137";
+  const mock = mockFetch((url, opts) => {
+    if (!/youtubei\/v1\/player/.test(url)) return { ok: true, status: 200, json: async () => ({}) };
+    const client = JSON.parse(opts.body).context.client.clientName;
+    if (client === "VISIONOS") {
+      return ok({ playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Sign in to confirm you’re not a bot" } });
+    }
+    return ok(fresh);
+  });
+  try {
+    const stream = ytBuildStreams(player).find((s) => s.label === "1080p");
+    const plan = await ytResolveDownload(ytParsePlayer(player, ID), stream);
+    assert.equal(plan.parts[0].url, "https://rr2.example.com/ios137");
   } finally {
     mock.restore();
     restoreCfg();

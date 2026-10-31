@@ -187,13 +187,34 @@ export function ytParsePlayer(data, videoId) {
   };
 }
 
+const YT_PLAYER_TIMEOUT = 15000;
+const YT_PROBE_TIMEOUT = 8000;
+// 同一账号/网络下 InnerTube 偶发下发被 googlevideo 拒绝的签名（实测约四分之一），
+// 同一条链重试也没用，只能重取一份新响应；4 次全坏的几率低于 0.5%
+const YT_DOWNLOAD_ATTEMPTS = 4;
+
+// 代理链路下请求可能一直挂着不返回，探测/取档都必须带超时
+async function ytFetchTimeout(url, opts, ms) {
+  const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), ms) : null;
+  try {
+    return await fetch(url, ctrl ? { ...opts, signal: ctrl.signal } : opts);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function ytPlayerOnce(videoId, client) {
-  const resp = await fetch(YT_PLAYER + "?key=" + encodeURIComponent(ytApiKey()) + "&prettyPrint=false", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(ytPlayerBody(videoId, client)),
-  });
+  const resp = await ytFetchTimeout(
+    YT_PLAYER + "?key=" + encodeURIComponent(ytApiKey()) + "&prettyPrint=false",
+    {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ytPlayerBody(videoId, client)),
+    },
+    YT_PLAYER_TIMEOUT
+  );
   if (!resp.ok) throw new Error("HTTP " + resp.status);
   const json = await resp.json();
   const status = (json && json.playabilityStatus) || {};
@@ -297,50 +318,90 @@ function ytHostCandidates(url) {
   return out;
 }
 
+// 返回真正能取到数据的节点；全都不通返回 null，由调用方重取新签名。
+// 必须用 HEAD：拿 GET + Range 探一下会把「0-1 字节」的分段响应留在 HTTP 缓存里，
+// 紧接着同一条链的整段下载会命中这条残缺缓存，只读到 2 字节就结束（数据不完整）。
 async function ytPickReachable(url) {
   for (const cand of ytHostCandidates(url)) {
     try {
-      const resp = await fetch(cand, { headers: { Range: "bytes=0-0" }, credentials: "omit" });
-      if (resp.ok) return cand;
+      const resp = await ytFetchTimeout(
+        cand,
+        { method: "HEAD", credentials: "omit", cache: "no-store" },
+        YT_PROBE_TIMEOUT
+      );
+      // 个别边缘节点不支持 HEAD，这种「没被拒绝」不能当成签名失效
+      if (resp.ok || resp.status === 405 || resp.status === 501) return cand;
     } catch (e) {}
   }
-  return url;
+  return null;
 }
 
-// 直链带 expire/签名字段，点下载时按同 id 重取；label 优先、itag 次之，都没有退回菜单旧链
-export async function ytResolveDownload(item, stream) {
-  let fresh = [];
-  let freshAudio = null;
-  try {
-    const data = await ytFetchPlayer(item.videoId);
-    fresh = ytBuildStreams(data);
-    freshAudio = ytBestAac((data.streamingData || {}).adaptiveFormats);
-  } catch (e) {}
-  const hit =
-    fresh.find((s) => s.label === stream.label) ||
-    (stream.itag ? fresh.find((s) => s.itag === stream.itag) : null);
-  const videoUrl = (hit && hit.url) || stream.url;
-  if (!videoUrl) throw new Error("该清晰度不可用");
+function ytPlan(item, stream, videoUrl, audioUrl) {
   // 移动端 client 下发的直链不带 Range 会直接 403（只允许分段请求）；
   // bytes=0- 照样拿到整份，Content-Length 仍是总大小
   const req = { credentials: "omit", headers: { Range: "bytes=0-" } };
   if (stream.kind === "mux") {
-    const audioUrl = (freshAudio ? ytHttps(freshAudio.url) : "") || stream.audioUrl;
-    if (!audioUrl) throw new Error("该清晰度缺少音轨，暂不支持合并");
     return {
       merge: "fmp4",
       parts: [
-        { url: await ytPickReachable(videoUrl), ...req },
-        { url: await ytPickReachable(audioUrl), ...req },
+        { url: videoUrl, ...req },
+        { url: audioUrl, ...req },
       ],
       filename: ytFilename(item, stream),
     };
   }
   return {
-    url: await ytPickReachable(videoUrl),
+    url: videoUrl,
     ...req,
     filename: ytFilename(item, stream),
   };
+}
+
+// 画面/音轨都探得通才算可用，返回 null 让上层换一份响应
+async function ytProbePlan(item, stream, videoUrl, audioUrl) {
+  if (!videoUrl) return null;
+  if (stream.kind === "mux" && !audioUrl) return null;
+  const videoOk = await ytPickReachable(videoUrl);
+  if (!videoOk) return null;
+  const audioOk = audioUrl ? await ytPickReachable(audioUrl) : "";
+  if (audioUrl && !audioOk) return null;
+  return ytPlan(item, stream, videoOk, audioOk);
+}
+
+// 直链带 expire/签名字段，点下载时按同 id 重取；label 优先、itag 次之。
+// 取到的链先 HEAD 探一次，被拒就整份重取——同一条链重试是没用的；
+// 某个 client 被风控就直接跳过，换下一个（VISIONOS 被挡时 IOS 常还能出链）。
+export async function ytResolveDownload(item, stream) {
+  const dead = new Set();
+  for (let attempt = 0; attempt < YT_DOWNLOAD_ATTEMPTS; attempt++) {
+    for (const client of YT_CLIENTS) {
+      if (dead.has(client.clientName)) continue;
+      let data = null;
+      try {
+        data = await ytPlayerOnce(item.videoId, client);
+      } catch (e) {
+        dead.add(client.clientName);
+        continue;
+      }
+      const fresh = ytBuildStreams(data);
+      const hit =
+        fresh.find((s) => s.label === stream.label) ||
+        (stream.itag ? fresh.find((s) => s.itag === stream.itag) : null);
+      if (!hit) continue;
+      let audioUrl = "";
+      if (stream.kind === "mux") {
+        const bestAudio = ytBestAac((data.streamingData || {}).adaptiveFormats);
+        audioUrl = (bestAudio ? ytHttps(bestAudio.url) : "") || stream.audioUrl || "";
+        if (!audioUrl) continue;
+      }
+      const plan = await ytProbePlan(item, stream, hit.url, audioUrl);
+      if (plan) return plan;
+    }
+  }
+  // 新链全被拒时，菜单里的旧链也还有约 2 小时有效期，同样探一次
+  const plan = await ytProbePlan(item, stream, stream.url, stream.audioUrl || "");
+  if (plan) return plan;
+  throw new Error("YouTube 直链被拒绝，请刷新页面后重试");
 }
 
 export function ytParse(raw) {
