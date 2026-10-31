@@ -165,7 +165,7 @@ test("ytBuildStreams 单文件带音轨、自适应 MP4 与 AAC 合成合并档�
   const streams = ytBuildStreams(player);
   assert.deepEqual(
     streams.map((s) => s.label),
-    ["1440p", "1080p", "360p", "音频 129kbps"]
+    ["1440p", "1080p", "360p"]
   );
   const p1080 = streams.find((s) => s.label === "1080p");
   assert.equal(p1080.itag, 137);
@@ -177,9 +177,7 @@ test("ytBuildStreams 单文件带音轨、自适应 MP4 与 AAC 合成合并档�
   assert.equal(progressive.itag, 18);
   assert.equal(progressive.kind, undefined);
   assert.equal(progressive.url, "https://rr1.example.com/videoplayback?itag=18");
-  const audio = streams.find((s) => s.kind === "audio");
-  assert.equal(audio.itag, 140);
-  assert.equal(audio.label, "音频 129kbps");
+  assert.equal(streams.some((s) => s.kind === "audio"), false, "全部可合并时不列独立音频");
 });
 
 test("ytBuildStreams WebM/VP9 或无 AAC 时保留拆分画面", () => {
@@ -225,7 +223,7 @@ test("ytParsePlayer 转换元信息，非 OK 或无流返回 null", () => {
   assert.equal(item.videoId, ID);
   assert.equal(item.title, "测试视频");
   assert.equal(item.author, "测试作者");
-  assert.equal(item.streams.length, 4);
+  assert.equal(item.streams.length, 3);
   assert.equal(ytParsePlayer({ ...player, playabilityStatus: { status: "LOGIN_REQUIRED" } }, ID), null);
   assert.equal(ytParsePlayer({ ...player, streamingData: {} }, ID), null);
   assert.equal(ytParsePlayer(null, ID), null);
@@ -303,7 +301,7 @@ test("ytLoadVideo 取档位写 store，第二次命中缓存", async () => {
   try {
     const store = createStore();
     const item = await ytLoadVideo(ID, store);
-    assert.equal(item.streams.length, 4);
+    assert.equal(item.streams.length, 3);
     assert.equal(store.get(ID).title, "测试视频");
     await ytLoadVideo(ID, store);
     assert.equal(mock.calls.length, 1);
@@ -353,8 +351,12 @@ test("ytResolveDownload 按 label 取新链，失败退回菜单旧链", async (
   }
   mock = mockFetch(() => ({ ok: false, status: 403, json: async () => ({}) }));
   try {
-    const stream = ytBuildStreams(player).find((s) => s.kind === "audio");
-    const item = ytParsePlayer(player, ID);
+    const split = clone(player);
+    split.streamingData.adaptiveFormats = split.streamingData.adaptiveFormats.filter(
+      (f) => f.itag === 248 || f.itag === 140
+    );
+    const stream = ytBuildStreams(split).find((s) => s.kind === "audio");
+    const item = ytParsePlayer(split, ID);
     const plan = await ytResolveDownload(item, stream);
     assert.equal(plan.url, "https://rr1.example.com/a140");
     assert.match(plan.filename, /音频 129kbps\.m4a$/);
@@ -453,7 +455,7 @@ test("ytRefresh 从地址栏取 id 补档，已有档位不再请求", async () 
   try {
     const store = createStore();
     await ytRefresh(store);
-    assert.equal(store.get(ID).streams.length, 4);
+    assert.equal(store.get(ID).streams.length, 3);
     await ytRefresh(store);
     assert.equal(mock.calls.length, 1);
   } finally {

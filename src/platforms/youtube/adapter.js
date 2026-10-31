@@ -75,6 +75,19 @@ function ytIsAudio(f) {
   return /^audio\//.test(String((f && f.mimeType) || ""));
 }
 
+// 音轨只取 AAC/m4a 里码率最高的一条；合并档复用这条，拆分画面档也靠它补齐
+function ytBestAac(adaptive) {
+  const audios = (adaptive || []).filter(
+    (f) => f && f.url && ytIsAudio(f) && /audio\/mp4/i.test(f.mimeType)
+  );
+  return audios.length
+    ? audios.reduce(
+        (a, b) => ((Number(b.bitrate) || 0) > (Number(a.bitrate) || 0) ? b : a),
+        audios[0]
+      )
+    : null;
+}
+
 export function ytBuildStreams(data) {
   const sd = (data && data.streamingData) || {};
   const formats = Array.isArray(sd.formats) ? sd.formats : [];
@@ -91,14 +104,7 @@ export function ytBuildStreams(data) {
     out.push({ label, url: ytHttps(f.url), itag: Number(f.itag) });
   }
 
-  // 音轨只取 AAC/m4a 里码率最高的一条；合并档与独立音频档共用这条
-  const audios = adaptive.filter((f) => f && f.url && ytIsAudio(f) && /audio\/mp4/i.test(f.mimeType));
-  const bestAudio = audios.length
-    ? audios.reduce(
-        (a, b) => ((Number(b.bitrate) || 0) > (Number(a.bitrate) || 0) ? b : a),
-        audios[0]
-      )
-    : null;
+  const bestAudio = ytBestAac(adaptive);
   const audioKbps = bestAudio ? Math.round((Number(bestAudio.bitrate) || 0) / 1000) : 0;
 
   // 自适应画面：同 label 取编码/码率最优的一条
@@ -131,7 +137,8 @@ export function ytBuildStreams(data) {
     out.push({ label, url: ytHttps(best.url), itag: Number(best.itag), kind: "video" });
   }
 
-  if (bestAudio) {
+  // 独立音频只在存在无法合并的画面档时列出；能合并的档自带音轨，不再重复
+  if (bestAudio && out.some((s) => s.kind === "video")) {
     out.push({
       label: "音频 " + (audioKbps ? audioKbps + "kbps" : ""),
       url: ytHttps(bestAudio.url),
@@ -289,8 +296,11 @@ async function ytPickReachable(url) {
 // 直链带 expire/签名字段，点下载时按同 id 重取；label 优先、itag 次之，都没有退回菜单旧链
 export async function ytResolveDownload(item, stream) {
   let fresh = [];
+  let freshAudio = null;
   try {
-    fresh = ytBuildStreams(await ytFetchPlayer(item.videoId));
+    const data = await ytFetchPlayer(item.videoId);
+    fresh = ytBuildStreams(data);
+    freshAudio = ytBestAac((data.streamingData || {}).adaptiveFormats);
   } catch (e) {}
   const hit =
     fresh.find((s) => s.label === stream.label) ||
@@ -301,11 +311,7 @@ export async function ytResolveDownload(item, stream) {
   // bytes=0- 照样拿到整份，Content-Length 仍是总大小
   const req = { credentials: "omit", headers: { Range: "bytes=0-" } };
   if (stream.kind === "mux") {
-    const audioItag = (hit && hit.audioItag) || stream.audioItag;
-    const audio =
-      (audioItag && fresh.find((s) => s.kind === "audio" && s.itag === audioItag)) ||
-      fresh.find((s) => s.kind === "audio");
-    const audioUrl = (audio && audio.url) || stream.audioUrl;
+    const audioUrl = (freshAudio ? ytHttps(freshAudio.url) : "") || stream.audioUrl;
     if (!audioUrl) throw new Error("该清晰度缺少音轨，暂不支持合并");
     return {
       merge: "fmp4",

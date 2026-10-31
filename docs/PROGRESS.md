@@ -34,6 +34,20 @@
 | M10.3 | ✅ | 批次 8 |
 | M10.4 | ✅ | 批次 8 |
 
+## v0.14.1 ✅ {spec §M7.3/M9.1/M9.3/M10.3/M10.4 · 可合并档位不再列独立音频}
+- 需求（用户反馈）：能合流的档位不必再列音频链接，只有不能合流的组合才分流显示
+- 文档：prd M7/M9 说明；spec M7.3/M7.4/M9.1/M9.3/M10.3/M10.4 验收与算法；README 的 B站 / YouTube 说明；spec 调整记录追加 2026-11-01「改验收」
+- 实现：
+  - [src/platforms/youtube/adapter.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/adapter.js)：抽出 `ytBestAac`（唯一 AAC 音轨来源）；`ytBuildStreams` 仅当输出里存在 `kind:"video"` 拆分档时才补一条 `音频 <kbps>kbps`，全可合并时不再列音频
+  - 同文件 `ytResolveDownload`：合并档的音轨改为在现取的 player 数据里用 `ytBestAac` 直取，取不到才退回菜单旧 `audioUrl`（菜单里已没有音频条目可依赖）
+  - [src/platforms/bilibili/adapter.js](file:///E:/work/ai/video-downloader/src/platforms/bilibili/adapter.js)：DASH 每档不再输出「<档位> 音频」，只有「<档位>」合并档或「<档位> 画面（无音轨）」；`biliFilename` 恒为 `.mp4`；`biliResolveDownload` 删去 `kind:"audio"` 分支
+- 单测：`npm test` **117 pass / 0 fail**（YouTube 主用例断言无 `kind:"audio"`、VP9 拆分仍保留音频、`ytResolveDownload` 403 回退改用拆分夹具取新音轨；B站档位计数 4→3 并删掉音频 resolve 用例）
+- 真页收点（CDP 注入 0.14.1；本机 TM 里另有 0.13.0 旧实例并存，靠注入后每锚点新增的按钮（DOM 靠后）点选区分归属）：
+  - 全可合并 `9bZkp7q19f0`：旧 0.13.0 菜单 `1080p/720p/480p/360p/240p/144p + 音频 130kbps`；新构建菜单 `1080p/720p/480p/360p/240p/144p`，**无音频行**（点新按钮只弹 1 个弹层）
+  - 拆分档 `dQw4w9WgXcQ`：新构建 `2160p 画面（无音轨）/ 1440p 画面（无音轨）/ 1080p/720p/480p/360p/360p 画面（无音轨）/ 240p/144p + 音频 131kbps`，**音频只列一条**
+  - B站 `BV1GJ411x7h7`：`高清 1080P / 高清 720P / 流畅 360P`，无「高清 1080P 音频」
+- 构建：`npm run build` → `dist/douyin.user.js` **90 330 B**，`node --check` 通过，`@version 0.14.1`，sha256 `4638a26ea30de69859765c7de842dff9f8e8a434f0b6509439a14b286287d55e`
+
 ## v0.14.0 ✅ {spec §M10 · 音视频合并下载}
 - 目标：分离流档位（YouTube 自适应 / B站 DASH）点一档只下一个文件（画面+音轨无损合并在浏览器内完成）
 - 方案定案：自写零依赖 fMP4 box 合并（不引入 mediabunny / ffmpeg.wasm，不做云端队列）；实测 dist 72 841 B → 90 498 B（+17 657 B，+24.2%，合并器本体 10 297 B）

@@ -85,12 +85,8 @@ export function buildBiliDashStreams(durlData, dashData) {
   const out = [];
   for (const [qn, list] of groups) {
     const desc = descOf(qn);
-    if (hasAudio) {
-      out.push({ label: desc, qn, kind: "mux" });
-      out.push({ label: desc + " 音频", qn, kind: "audio" });
-    } else {
-      out.push({ label: desc + " 画面（无音轨）", qn, kind: "video" });
-    }
+    if (hasAudio) out.push({ label: desc, qn, kind: "mux" });
+    else out.push({ label: desc + " 画面（无音轨）", qn, kind: "video" });
   }
   return sortStreams(out);
 }
@@ -118,8 +114,7 @@ export function biliFilename(item, stream) {
   if (item.pageCount > 1 && item.part) parts.push("P" + item.page + " " + item.part);
   parts.push(stream.label);
   const name = sanitizeName(parts.filter(Boolean).join("_")).replace(/\s+/g, " ");
-  const ext = stream.kind === "audio" ? ".m4a" : ".mp4";
-  return name.slice(0, 120) + ext;
+  return name.slice(0, 120) + ".mp4";
 }
 
 export function biliParse(raw) {
@@ -153,20 +148,14 @@ export async function biliResolveDownload(item, stream) {
       filename: biliFilename(item, stream),
     };
   }
-  if (stream.kind === "video" || stream.kind === "audio") {
+  if (stream.kind === "video") {
     const resp = await fetch(biliPlayurlUrl(item, stream.qn, BILI_DASH_FNVAL), {
       credentials: "include",
     });
     const json = await resp.json();
     const dash = (json.data && json.data.dash) || {};
-    let url = "";
-    if (stream.kind === "video") {
-      const same = (dash.video || []).filter((v) => Number(v.id) === Number(stream.qn));
-      if (same.length) url = dashUrl(pickDashVideo(same));
-    } else {
-      const audio = dash.audio || [];
-      if (audio.length) url = dashUrl(pickDashAudio(audio));
-    }
+    const same = (dash.video || []).filter((v) => Number(v.id) === Number(stream.qn));
+    const url = same.length ? dashUrl(pickDashVideo(same)) : "";
     if (!url) throw new Error("该清晰度不可用");
     return { url, credentials: "omit", filename: biliFilename(item, stream) };
   }
