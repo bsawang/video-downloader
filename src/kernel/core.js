@@ -14,6 +14,11 @@ export function start(adapter) {
   let renderQueued = false;
   let mountedCount = 0;
   let fallbackCount = 0;
+  let overlayLayer = null;
+  let overlayRaf = null;
+  // 卡片按钮浮层：站点把卡片包在 transform 层叠上下文里时（如 YouTube Shorts 货架），
+  // 卡片内的按钮永远压不过外面的 hover 预览层，只能挂到页面级浮层上
+  const overlayItems = new Map(); // btn -> 挂载元素
 
   const nativeFetch = installNetworkHooks(adapter, store);
   const download = createDownloader({ nativeFetch, toast });
@@ -35,8 +40,48 @@ export function start(adapter) {
     }, 200);
   }
 
+  function ensureOverlayLayer() {
+    if (overlayLayer && overlayLayer.isConnected) return overlayLayer;
+    overlayLayer = document.createElement("div");
+    overlayLayer.setAttribute("data-dl-layer", "1");
+    overlayLayer.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:100000;";
+    document.documentElement.appendChild(overlayLayer);
+    return overlayLayer;
+  }
+
+  function placeOverlay(btn, target) {
+    const r = target.getBoundingClientRect();
+    const visible = r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight;
+    btn.style.display = visible ? "block" : "none";
+    if (!visible) return;
+    btn.style.top = Math.round(r.top + 8) + "px";
+    btn.style.left = Math.round(r.right - btn.offsetWidth - 8) + "px";
+  }
+
+  function syncOverlay() {
+    overlayRaf = null;
+    for (const [btn, target] of overlayItems) {
+      if (!btn.isConnected || !target.isConnected) continue;
+      placeOverlay(btn, target);
+    }
+  }
+
+  function scheduleOverlay() {
+    if (overlayRaf) return;
+    overlayRaf = requestAnimationFrame(syncOverlay);
+  }
+
+  window.addEventListener("scroll", scheduleOverlay, { capture: true, passive: true });
+  window.addEventListener("resize", scheduleOverlay, { passive: true });
+
   function renderAll() {
     const found = scan(adapter.anchors);
+    for (const [btn, target] of overlayItems) {
+      if (!btn.isConnected || !target.isConnected) {
+        btn.remove();
+        overlayItems.delete(btn);
+      }
+    }
     ensureHoverStyle();
     let mounted = 0;
     let fallback = 0;
@@ -51,6 +96,8 @@ export function start(adapter) {
       // 列表虚拟滚动会复用节点：id 变了先摘掉旧按钮，避免按钮指向旧视频
       if (prev && prev.videoId !== videoId) {
         el.querySelectorAll("[data-dl-icon]").forEach((b) => b.remove());
+        if (prev.btn.isConnected) prev.btn.remove();
+        overlayItems.delete(prev.btn);
       }
       let item = store.get(videoId);
       // 卡片页只知 bvid：先挂占位条目，档位等 hover 预取或点击时解析
@@ -76,6 +123,8 @@ export function start(adapter) {
         isDetail: rule.kind === "detail",
         iconRight: rule.iconRight,
         pos: rule.pos,
+        alwaysShow: rule.alwaysShow,
+        fixed: rule.overlay,
         onOpen:
           stub && adapter.loadItem
             ? async () => {
@@ -96,8 +145,14 @@ export function start(adapter) {
           download(plan, { streamToDisk: !!adapter.streamToDisk, suggestedName: name });
         },
       });
-      anchor.appendChild(btn);
-      anchor.setAttribute("data-dl-hover", "1");
+      if (rule.overlay) {
+        ensureOverlayLayer().appendChild(btn);
+        overlayItems.set(btn, anchor);
+        placeOverlay(btn, anchor);
+      } else {
+        anchor.appendChild(btn);
+        anchor.setAttribute("data-dl-hover", "1");
+      }
       // hover 预取：等用户点开时档位大概率已到位；节点复用后 videoId 会变，所以每次读当前映射
       if (adapter.prefetch && !anchorsHooked.has(anchor)) {
         anchorsHooked.add(anchor);
@@ -122,6 +177,7 @@ export function start(adapter) {
       fallback: fallbackCount,
       downloadable: store.entries().filter((i) => i.streams.length).length,
     };
+    scheduleOverlay();
     return mounted;
   }
 

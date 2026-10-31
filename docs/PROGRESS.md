@@ -28,6 +28,31 @@
 | M9.1 | ✅ | 批次 6 |
 | M9.2 | ✅ | 批次 6 |
 | M9.3 | ✅ | 批次 6 |
+| M9.4 | ✅ | 批次 7 |
+
+## v0.13.0 ✅ {spec §M9.4 · Shorts 接入 + hover 预览下按钮存活}
+- 缺陷 / 需求（用户反馈）：
+  - 视频卡片 hover 触发预览后下载按钮消失（YouTube 预览是覆盖在缩略图上的全局层 `#video-preview`，指针进入后卡片不再 `:hover`，hover 揭示把按钮藏掉）
+  - Shorts 类型没有下载入口（`/shorts/<id>` 播放页与首页 Shorts 货架卡片均不挂）
+- 调研（CDP 运行态）：
+  - 预览层：`DIV#video-preview > YTD-VIDEO-PREVIEW.ytdVideoPreviewHost.ytdVideoPreviewActive`（`position:absolute`，`z-index:auto`），内部 `DIV.ytdVideoPreviewVideoPreviewContainer` 与缩略图同框（528×297），**不在卡片 DOM 内**（`closest('yt-lockup-view-model')` 为 null）
+  - 常规网格卡片：按钮常显后 25/25 命中测试为按钮本身（根层叠上下文里 `z-index:99999` 高于预览层），无需抬层
+  - Shorts 货架：容器 `DIV#contents.ytd-rich-shelf-renderer` 带 `transform` → 建立层叠上下文，卡内按钮（`z-index:99999`）整页层面压不过预览层，命中测试落到 `VIDEO`；必须挂页面级浮层
+  - Shorts DOM：播放页实际播放器是竖屏 `#shorts-player`（405×767），`#movie_player` 存在但 0×0 隐藏；货架卡片 `ytm-shorts-lockup-view-model`，id 只在内部 `a[href="/shorts/<id>"]`，标题在 `h3`
+  - Shorts 直链：`ANDROID_VR` 对该 Short 回 `LOGIN_REQUIRED` → `IOS` 兜底 `OK`，30 条 adaptive、0 条 progressive（菜单因此只有「画面（无音轨）」+ 音频）
+- 改动：
+  - [src/platforms/youtube/rules.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/rules.js)：`ytVideoIdFromUrl` 同时认 `/watch?v=` 与 `/shorts/`；`ytCurrentVideoId` 读 `pathname + search`；`ytCardVideoId` 遍历任意 `a[href]`；新增 `#shorts-player` 详情锚点（`pageScope: /^\/shorts/`）；卡片锚点加 `ytm-shorts-lockup-view-model` / `ytd-reel-item-renderer`，全部 `alwaysShow`，Shorts 两条另加 `overlay`
+  - [src/kernel/core.js](file:///E:/work/ai/video-downloader/src/kernel/core.js)：新增页面级浮层挂载（`div[data-dl-layer]`：`fixed;inset:0;pointer-events:none;z-index:100000`，按钮自身 `pointer-events:auto`）；`placeOverlay` 按挂载元素 `getBoundingClientRect()` 定位右上内缩 8px，离屏/零尺寸隐藏；`scroll`(capture)/`resize` 走 rAF 合批重定位；节点复用/卸载时同步清理浮层条目
+  - [src/kernel/ui.js](file:///E:/work/ai/video-downloader/src/kernel/ui.js)：卡片按钮支持 `fixed` 定位；常显由 `alwaysShow` 控制
+  - 文档：prd M9 范围、spec §2.2 `AnchorRule.alwaysShow/overlay`、M9.2/M9.4 详细设计、README「YouTube 说明」补 Shorts 与常显按钮
+  - 版本 0.12.0 → **0.13.0**
+- 单测：`npm test` **99 pass / 0 fail**（含 Shorts id 解析、`#movie_player`/`#shorts-player` scope 互斥、卡片 `alwaysShow/overlay`）
+- 真页收点（CDP 注入 0.13.0，首页 Shorts 货架）：
+  - 10/10 Shorts 卡片按钮挂浮层；例：缩略图 311×466 @ (264,629) → 按钮 27×28 @ (540,637)（右缩 8px / 上缩 8px）；视口外卡片按钮 `display:none`
+  - hover 预览激活（`ytd-video-preview` 带 `Active/Playing`，`<video>` `readyState 4`、`t=1.7s`、未暂停）时按钮仍 `display:block`，按钮中心 `elementFromPoint` = `button[data-dl-icon]`，层序 `button > video > #inline-preview-player`
+  - 点按钮 → 菜单 **6 档**（720p/480p/360p/240p/144p 画面（无音轨）+ 音频 130kbps），标题取自接口
+  - 点 144p：InnerTube 重取 200；googlevideo `itag=160` 响应 `206`、`Content-Range: bytes 0-705985/705986`；随后代理节点中断（`Range: bytes=0-` 正文只回 1 B，直连 googlevideo 全部超时），落盘未完成 —— 环境网络问题，链路请求本身正确
+- 构建：`npm run build` → `dist/douyin.user.js` **72 396 B**，`@version 0.13.0`，sha256 `4efb7c569f5b5cea53999c8c6a8b0cfb9dbb8f4f347d90a502372da6b09f6bbd`
 
 ## v0.12.0 ✅ {spec §M9 · YouTube 平台接入}
 - 调研（CDP 运行态 + InnerTube 实测）：

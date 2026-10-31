@@ -123,20 +123,25 @@ function ok(json) {
   return { ok: true, status: 200, json: async () => json };
 }
 
-test("ytVideoIdFromUrl 只认 watch 的 v 参数", () => {
+test("ytVideoIdFromUrl 解析 watch 与 shorts 的 id", () => {
   assert.equal(ytVideoIdFromUrl("https://www.youtube.com/watch?v=" + ID + "&list=x"), ID);
   assert.equal(ytVideoIdFromUrl("/watch?v=" + ID), ID);
+  assert.equal(ytVideoIdFromUrl("https://www.youtube.com/shorts/" + ID), ID);
+  assert.equal(ytVideoIdFromUrl("/shorts/" + ID + "?feature=share"), ID);
   assert.equal(ytVideoIdFromUrl("https://www.youtube.com/watch?v=short"), null);
+  assert.equal(ytVideoIdFromUrl("https://www.youtube.com/shorts/short"), null);
   assert.equal(ytVideoIdFromUrl("https://www.youtube.com/results?search_query=rick"), null);
   assert.equal(ytVideoIdFromUrl(""), null);
 });
 
-test("ytCurrentVideoId 从地址栏 search 取 id", () => {
+test("ytCurrentVideoId 从地址栏 pathname/search 取 id", () => {
   assert.equal(ytCurrentVideoId({ search: "?v=" + ID }), ID);
+  assert.equal(ytCurrentVideoId({ pathname: "/shorts/" + ID, search: "" }), ID);
   assert.equal(ytCurrentVideoId({ search: "?list=x" }), null);
+  assert.equal(ytCurrentVideoId({ pathname: "/shorts/", search: "" }), null);
 });
 
-test("ytCardVideoId 从卡片内 watch 链接取 id，无链接返回 null", () => {
+test("ytCardVideoId 从卡片内视频链接取 id，无链接返回 null", () => {
   const card = {
     querySelectorAll: () => [
       { getAttribute: () => "/channel/UC123" },
@@ -144,6 +149,8 @@ test("ytCardVideoId 从卡片内 watch 链接取 id，无链接返回 null", () 
     ],
   };
   assert.equal(ytCardVideoId(card), ID);
+  const shorts = { querySelectorAll: () => [{ getAttribute: () => "/shorts/" + ID }] };
+  assert.equal(ytCardVideoId(shorts), ID);
   assert.equal(ytCardVideoId({ querySelectorAll: () => [] }), null);
   assert.equal(ytCardVideoId(null), null);
 });
@@ -404,19 +411,35 @@ test("ytRefresh 从地址栏取 id 补档，已有档位不再请求", async () 
   }
 });
 
-test("ytRules 播放页锚点与卡片锚点", () => {
+test("ytRules 播放页/Shorts 锚点与卡片锚点", () => {
   assert.deepEqual(ytRules.matches, ["*://www.youtube.com/*", "*://youtube.com/*"]);
-  const detail = ytRules.anchors.find((a) => a.kind === "detail");
-  assert.equal(detail.selector, "#movie_player");
-  assert.deepEqual(detail.pos, { top: 12, right: 12 });
-  assert.equal(detail.pageScope.test("/watch"), true);
-  assert.equal(detail.pageScope.test("/results"), false);
+  const watch = ytRules.anchors.find((a) => a.selector === "#movie_player");
+  assert.equal(watch.kind, "detail");
+  assert.deepEqual(watch.pos, { top: 12, right: 12 });
+  assert.equal(watch.pageScope.test("/watch"), true);
+  assert.equal(watch.pageScope.test("/shorts/" + ID), false);
+  assert.equal(watch.pageScope.test("/results"), false);
+  const shorts = ytRules.anchors.find((a) => a.selector === "#shorts-player");
+  assert.equal(shorts.kind, "detail");
+  assert.deepEqual(shorts.mount, ["self"]);
+  assert.deepEqual(shorts.pos, { top: 12, right: 12 });
+  assert.equal(shorts.pageScope.test("/shorts/" + ID), true);
+  assert.equal(shorts.pageScope.test("/watch"), false);
   const card = ytRules.anchors.filter((a) => a.kind === "card");
   assert.deepEqual(
     card.map((a) => a.selector),
-    ["yt-lockup-view-model", "ytd-video-renderer", "ytd-compact-video-renderer"]
+    ["yt-lockup-view-model", "ytm-shorts-lockup-view-model", "ytd-video-renderer", "ytd-compact-video-renderer", "ytd-reel-item-renderer"]
   );
+  // 卡片按钮必须常显：hover 预览层会让卡片失去 :hover
+  assert.equal(card.every((a) => a.alwaysShow === true), true);
   assert.equal(card[0].idFrom({ querySelectorAll: () => [{ getAttribute: () => "/watch?v=" + ID }] }), ID);
+  const shortsCard = card.find((a) => a.selector === "ytm-shorts-lockup-view-model");
+  assert.deepEqual(shortsCard.mount, ["yt-thumbnail-view-model", "self"]);
+  assert.equal(shortsCard.idFrom({ querySelectorAll: () => [{ getAttribute: () => "/shorts/" + ID }] }), ID);
+  // 货架容器带 transform：卡内按钮压不过全局预览层，必须改挂页面级浮层
+  assert.equal(shortsCard.overlay, true);
+  assert.equal(card.find((a) => a.selector === "ytd-reel-item-renderer").overlay, true);
+  assert.equal(card[0].overlay, undefined);
   assert.equal(card[0].idFrom({ querySelectorAll: () => [] }), null);
 });
 

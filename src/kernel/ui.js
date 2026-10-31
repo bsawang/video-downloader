@@ -30,21 +30,25 @@ function sideCss(pos, fallback) {
 const FONT = 'font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",' +
   '"Segoe UI Symbol","Apple Symbols","Noto Sans Symbols 2",sans-serif;';
 
-export function createButton(item, { isDetail, onPick, onOpen, iconRight, pos }) {
+export function createButton(item, { isDetail, onPick, onOpen, iconRight, pos, alwaysShow, fixed }) {
   const btn = document.createElement("button");
   btn.setAttribute("data-dl-icon", "1");
   btn.textContent = isDetail ? "⬇ 下载" : "⬇";
   btn.title = (item.title || "").slice(0, 30);
   // text-indent:0：站点有 [title^=「] 之类的规则，会把带 title 的按钮按标题排缩进
+  // fixed：挂到页面级浮层（内核负责定位），用于站点覆盖层会盖住卡片按钮的场景
+  const cardPos = fixed ? "position:fixed;pointer-events:auto;" : "position:absolute;top:8px;right:8px;";
   btn.style.cssText = isDetail
     ? "position:absolute;" + sideCss(pos, "right:16px;bottom:16px;") + "z-index:99999;text-indent:0;" + FONT +
       "background:rgba(47,107,255,.95);color:#fff;border:none;border-radius:10px;" +
       "padding:10px 18px;font-size:15px;font-weight:600;cursor:pointer;" +
       "box-shadow:0 3px 10px rgba(0,0,0,.4);"
-    : "position:absolute;top:8px;right:8px;z-index:99999;text-indent:0;" + FONT +
+    : cardPos + "z-index:99999;text-indent:0;" + FONT +
       "background:rgba(47,107,255,.92);color:#fff;border:none;border-radius:8px;" +
       "padding:5px 10px;font-size:13px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.35);";
-  btn.style.display = "none";
+  // 站点 hover 预览会用覆盖层盖住缩略图、让 :hover 失效（YouTube #video-preview），
+  // 这类卡片改常显，按钮自身的 z-index 高于覆盖层即可保持可点
+  btn.style.display = alwaysShow ? "block" : "none";
   // 卡片右上角常被站点自己的 hover 控件（如「稍后再看」）占用，按规则让位
   if (!isDetail && iconRight != null) btn.style.right = iconRight + "px";
   // onOpen：占位条目（卡片页只知 bvid）在弹层前现取档位，可能等接口

@@ -64,6 +64,8 @@ AnchorRule = { selector: string, kind: 'card' | 'detail', mount: string[],   // 
                        | ((el: Element) => string | null),                  // 函数形式：DOM 无 id 信号时由平台自行取
                pageScope?: RegExp, resolve?(el: Element): Element,
                iconRight?: number,                                        // 列表按钮右偏移 px（让开站内控件）
+               alwaysShow?: boolean,                                      // 卡片按钮常显，不等 hover（点击后站点插入覆盖层、hover 失效时用）
+               overlay?: boolean,                                         // 按钮挂页面级浮层并按挂载元素定位（卡片的层叠上下文压不过站点覆盖层时用）
                pos?: { top?: number, right?: number, bottom?: number, left?: number } } // 详情按钮四边偏移 px，缺省 right/bottom 16
 ```
 
@@ -537,7 +539,7 @@ flowchart TD
 ### M9 平台接入（YouTube）🟢
 模块概要：
 - 职责：YouTube 播放页与列表卡片的识别、档位获取、直链解析、下载命名，全部差异留在本模块
-- 输入：页面地址 `watch?v=<11位id>` / 卡片 DOM（`yt-lockup-view-model`、`ytd-video-renderer`、`ytd-compact-video-renderer` 内的 `/watch?v=` 链接）/ 同源 `youtubei/v1/player`（`ANDROID_VR` 客户端，失败回退 `IOS`）
+- 输入：页面地址 `watch?v=<11位id>` / `shorts/<11位id>` / 卡片 DOM（`yt-lockup-view-model`、`ytm-shorts-lockup-view-model`、`ytd-video-renderer`、`ytd-compact-video-renderer`、`ytd-reel-item-renderer` 内的 `/watch?v=` 或 `/shorts/` 链接）/ 同源 `youtubei/v1/player`（`ANDROID_VR` 客户端，失败回退 `IOS`）
 - 输出：`youtubeAdapter`（`PlatformAdapter`）
 - 依赖：M1、M2、M3（契约）
 - 被谁依赖：M6
@@ -551,20 +553,20 @@ flowchart TD
 - 接口：`ytVideoIdFromUrl(href): string|null`；`ytCurrentVideoId(loc?): string|null`；`ytApiKey(): string`；`ytPlayerBody(videoId, client?)`；`ytFetchPlayer(videoId): Promise<object>`；`ytBuildStreams(data): Stream[]`；`ytParsePlayer(data, videoId?): VideoItem|null`；`ytLoadVideo(videoId, store): Promise<VideoItem>`；`ytRefresh(store): Promise<void>`；`ytStub(videoId, el, rule)`
 - 数据结构：`Stream { label, url, itag, kind? }`（`kind` 缺省为单文件、`video`/`audio` 为分离流）；`VideoItem { videoId, title: videoDetails.title, author: videoDetails.author, streams }`；`ytPending: Map<id, Promise>` 并发去重；`YT_CLIENTS` 依次为 `{ clientName: "ANDROID_VR", clientVersion: "1.62.27", androidSdkVersion: 32, osName: "Android", osVersion: "12", deviceMake: "Oculus", deviceModel: "Quest 3", hl: "en", gl: "US" }` 与 `{ clientName: "IOS", clientVersion: "20.10.4", deviceModel: "iPhone16,2", osName: "iPhone", osVersion: "18.3.2.22D82", hl: "en", gl: "US" }`
 - 算法与规则：API key 取 `ytcfg.get("INNERTUBE_API_KEY")`，取不到用固定 key 兜底；`formats` 中 `mimeType` 以 `video/` 开头且有 `url` 的按 `qualityLabel` 入列（单文件含音轨，label 即 `qualityLabel`）；`adaptiveFormats` 中视频按 `qualityLabel` 分组，组内按「avc1 → vp9 → 其他」再比 `bitrate` 取最优，label 为 `qualityLabel + " 画面（无音轨）"`；音频只取 `audio/mp4`（AAC）中 `bitrate` 最高一条，label 为 `音频 <round(bitrate/1000)>kbps`；全部经 `sortStreams` 降序；`ANDROID_VR` 有 progressive（单文件带音轨），音乐厂牌等版权方视频会回 `LOGIN_REQUIRED`（`reason` 含「not a bot」），此时换 `IOS` 重试——`IOS` 对这些视频仍给 adaptive 直链（1080p 仍是 avc1 + AAC），但没有单文件档；播放页 `stub` 先挂占位按钮，标题取页面标题去掉 ` - YouTube` 后缀
-- 错误与边界：`playabilityStatus.status !== "OK"` 且两个 client 都失败 → 抛错：`reason` 含「not a bot」→「YouTube 要求人机验证，请先在浏览器打开该视频后再试」，`LOGIN_REQUIRED` →「该视频需要登录或年龄验证」，其余用 `reason`；非 2xx → `HTTP <status>`；OK 但无任何 `formats/adaptiveFormats` → 换下一个 client，全部落空 →「该视频没有可下载的清晰度」；refresh 失败静默、5s 内不重试同一 id；SPA 切视频后地址变化 → 新 id 走 stub + refresh 自愈；Shorts/直播页不匹配（非 `/watch`）
+- 错误与边界：`playabilityStatus.status !== "OK"` 且两个 client 都失败 → 抛错：`reason` 含「not a bot」→「YouTube 要求人机验证，请先在浏览器打开该视频后再试」，`LOGIN_REQUIRED` →「该视频需要登录或年龄验证」，其余用 `reason`；非 2xx → `HTTP <status>`；OK 但无任何 `formats/adaptiveFormats` → 换下一个 client，全部落空 →「该视频没有可下载的清晰度」；refresh 失败静默、5s 内不重试同一 id；SPA 切视频后地址变化 → 新 id 走 stub + refresh 自愈；直播页不匹配（非 `/watch`、非 `/shorts`）；Shorts 见 M9.4
 - 测试要点：`tests/youtube.test.mjs`（id 解析、单文件/自适应/音频构建、AVC 优先、排序、`ytParsePlayer` 元信息、`ytFetchPlayer` 请求体/风控回退、`ytLoadVideo` 缓存/并发、`ytRefresh` 跳过已有档位）；真页 CDP：`watch?v=dQw4w9WgXcQ` 按钮挂载与 10 档菜单、1080p 实际传输 77.2 MiB
 
 #### M9.2 列表卡片占位挂载与现取 🟢
-- **验收**：首页、搜索结果、播放页相关推荐中带 `/watch?v=` 的卡片 hover 出 ⬇（右上 8px），频道/播放列表等无视频 id 的卡片不注入；点按钮时先 toast「正在获取清晰度…」，InnerTube 返回后（≤3s）出菜单并列出该视频真实档位
+- **验收**：首页、搜索结果、播放页相关推荐中带视频 id 的卡片按钮**常显**（右上 8px，不依赖 hover），频道/播放列表等无视频 id 的卡片不注入；hover 触发预览后按钮仍可见、命中测试为按钮本身且可点开菜单；点按钮时先 toast「正在获取清晰度…」，InnerTube 返回后（≤3s）出菜单并列出该视频真实档位
 - **依赖**：M1.2、M3.1、M3.2
 
 详细设计：
-- 数据流：`scan` 命中 `yt-lockup-view-model` / `ytd-video-renderer` / `ytd-compact-video-renderer` → `ytCardVideoId` 从内部 `a[href*="/watch?v="]` 取 11 位 id → `ytStub` 取卡片标题 → 立即挂按钮 → 点击走 kernel `onOpen` → `ytLoadVideo` 请求 InnerTube → `store.upsert` → 弹层
-- 接口：`ytCardVideoId(el): string|null`；`ytCardTitle(el): string`；`ytStub(videoId, el, rule)`；`ytLoadVideo(videoId, store)`
+- 数据流：`scan` 命中 `yt-lockup-view-model` / `ytd-video-renderer` / `ytd-compact-video-renderer` → `ytCardVideoId` 从内部 `a[href]` 取 11 位 id（`/watch?v=` 或 `/shorts/`）→ `ytStub` 取卡片标题 → 立即挂按钮（`alwaysShow`）→ 点击走 kernel `onOpen` → `ytLoadVideo` 请求 InnerTube → `store.upsert` → 弹层
+- 接口：`ytCardVideoId(el): string|null`；`ytCardTitle(el): string`；`ytStub(videoId, el, rule)`；`ytLoadVideo(videoId, store)`；`AnchorRule.alwaysShow?: boolean`；`AnchorRule.overlay?: boolean`（Shorts 卡片用，见 M9.4）
 - 数据结构：占位条目 `{ videoId, title, author: "", streams: [] }`；`ytPending: Map<id, Promise>`
-- 算法与规则：id 正则 `[?&]v=([A-Za-z0-9_-]{11})`；标题依次取 `#video-title`、`yt-formatted-string#video-title`、`h3`、`.ytLockupMetadataViewModelTitle`，最后回退缩略图 `img[alt]`；`iconRight = 8`；`mount` 优先缩略图容器（`yt-thumbnail-view-model` / `#thumbnail`），回退 `self`；同一 id 并发只发一轮请求，成功后写 store，失败清 pending 允许重试
-- 错误与边界：卡片无 `/watch?v=`（频道、播放列表、广告外链）→ `idFrom` null 不挂；不做 hover 预取（卡片多、InnerTube 易触发人机验证，按点击现取）；接口报错时 toast 具体原因；卡片标题缺失时菜单标题用接口返回的真实标题
-- 测试要点：`tests/youtube.test.mjs`（`ytCardVideoId` 多链接/无链接、`ytCardTitle` 选择器、`ytStub`）；真页 CDP：首页 23/23 卡片挂载、点击出 9 档菜单（含 IOS 回退）
+- 算法与规则：id 正则同时认 `[?&]v=([A-Za-z0-9_-]{11})` 与 `/shorts/([A-Za-z0-9_-]{11})`；标题依次取 `#video-title`、`yt-formatted-string#video-title`、`h3`、`.ytLockupMetadataViewModelTitle`，最后回退缩略图 `img[alt]`；`iconRight = 8`；`mount` 优先缩略图容器（`yt-thumbnail-view-model` / `#thumbnail`），回退 `self`；同一 id 并发只发一轮请求，成功后写 store，失败清 pending 允许重试。**按钮常显**：hover 预览由 YouTube 全局层 `#video-preview > ytd-video-preview`（`position:absolute`，`z-index:auto`）精确覆盖缩略图（实测覆盖区与缩略图同为 `528×297`），它不在卡片 DOM 内，指针进入后卡片与缩略图都不再 `:hover`；按钮的 `z-index:99999` 在根层叠上下文里高于该全局层，常显即可保持可见与可点
+- 错误与边界：卡片无视频 id（频道、播放列表、广告外链）→ `idFrom` null 不挂；不做 hover 预取（卡片多、InnerTube 易触发人机验证，按点击现取）；接口报错时 toast 具体原因；卡片标题缺失时菜单标题用接口返回的真实标题
+- 测试要点：`tests/youtube.test.mjs`（`ytCardVideoId` 多链接/无链接、Shorts 链接、`ytCardTitle` 选择器、`ytStub`、卡片锚点 `alwaysShow`）；真页 CDP：首页 23/23 卡片挂载、按钮常显、预览播放中按钮仍可点开菜单（含 IOS 回退）
 
 #### M9.3 直链现取与分离流命名 🟢
 - **验收**：点选任一档后重新请求 `/youtubei/v1/player`，按 `label`（缺失时按 `itag`）取新直链；发出的下载请求是 `googlevideo.com/videoplayback`（不带 Cookie、带 `Range: bytes=0-`），响应 `206`；重新取链失败时退回菜单里的旧直链，仍无可用直链则 toast「该清晰度不可用」；文件名形如 `作者_标题_1080p 画面（无音轨）.mp4`，音频档为 `.m4a`；大文件走 File System Access 落盘
@@ -578,9 +580,22 @@ flowchart TD
 - 错误与边界：InnerTube 重取失败/无匹配 → 退回 `stream.url`；两者皆无 →「该清晰度不可用」；googlevideo 非 2xx / 网络不可达 → kernel toast「下载失败：HTTP <status>」或「下载失败：TypeError: Failed to fetch」；分档视频无音轨由 label 明示，不做合并（与 M7.3 一致）
 - 测试要点：`tests/youtube.test.mjs`（重取命中/未命中退回旧链/两路皆无报错、节点回退、Range 头、文件名与扩展名、http→https）；真页 CDP：1080p 实际写入 77.2 MiB（4 638 次分块），144p 的 Range 请求 `206`
 
+#### M9.4 Shorts 播放页与 Shorts 卡片 🟢
+- **验收**：打开 `https://www.youtube.com/shorts/<11位id>` 后，竖屏播放器（`#shorts-player`）右上 12px 出现 **⬇ 下载**，菜单档位与 `youtubei/v1/player` 一致；首页 Shorts 货架卡片（`ytm-shorts-lockup-view-model`）按钮常显（缩略图右上 8px），点击出该 Short 的档位菜单；滑动切换 Short 后按钮随地址栏 id 更新；直播/播放列表页不注入
+- **依赖**：M1.2、M2.1、M3.1、M9.1
+
+详细设计：
+- 数据流：`/shorts/<id>` → entry 选中 `youtubeAdapter` → `ytCurrentVideoId` 读 `pathname` 取 id → 详情锚点 `#shorts-player` → `ytStub` 占位 → `ytRefresh` 走 `ytLoadVideo` 请求 InnerTube → 挂 `self`；Shorts 卡片 → `ytCardVideoId` 取内部 `/shorts/` 链接 → `ytStub` → 常显按钮（挂页面级浮层）→ 点击现取
+- 接口：复用 M9.1 / M9.2：`ytVideoIdFromUrl(href)` 同时解析 `/watch?v=` 与 `/shorts/`；`ytCurrentVideoId(loc)` 改读 `pathname + search`；`ytCardVideoId(el)` 遍历 `a[href]`
+- 数据结构：与 M9.1 / M9.2 相同（Shorts 共用 `Stream` / `VideoItem` / `ytPending`）
+- 算法与规则：Shorts 与普通视频共用 InnerTube `videoId` 通道，不额外解签名；详情锚点 `selector: "#shorts-player"`、`pageScope: /^\/shorts/`、`mount: ["self"]`、`pos: { top: 12, right: 12 }`；卡片锚点 `ytm-shorts-lockup-view-model`（`mount: ["yt-thumbnail-view-model", "self"]`）与旧版 `ytd-reel-item-renderer`（`mount: ["#thumbnail", "self"]`），均 `alwaysShow: true` + `overlay: true`；滑动后地址栏 id 变化 → kernel 发现 `videoId` 不同，摘旧按钮并按新 id 重挂
+- 层叠上下文：Shorts 货架容器 `#contents.ytd-rich-shelf-renderer` 带 `transform`，会建立自身层叠上下文，卡片内按钮（即使 `z-index: 99999`）在整页层面仍压不过全局预览层 `#video-preview`。因此 Shorts 卡片改走 `overlay: true`：按钮挂到 `documentElement` 下的页面级固定层（`div[data-dl-layer]`，`position: fixed; inset: 0; pointer-events: none; z-index: 100000`，按钮自身 `pointer-events: auto`），每帧按挂载元素的 `getBoundingClientRect()` 定位到右上内缩 8px；`scroll`（capture）/`resize` 触发 rAF 合批重定位，元素离屏或尺寸为 0 时隐藏。普通网格卡片实测无该层叠上下文问题（25/25 未受困），仍走卡内挂载
+- 错误与边界：`/shorts` 下取不到 id → 不挂；Shorts 页的 `#movie_player` 是 0×0 隐藏节点，不得作为详情锚点（`pageScope` 限 `/watch`）；受限 Short 的报错沿用 M9.1 文案；卡片链接不是视频（频道/播放列表）→ `idFrom` null 不挂
+- 测试要点：`tests/youtube.test.mjs`（`/shorts/` 解析、`ytCurrentVideoId` 读 pathname、Shorts 卡片 id、`#movie_player` 与 `#shorts-player` 的 `pageScope` 互斥、短卡片锚点 `mount/alwaysShow/overlay`）；真页 CDP：`/shorts/<id>` 按钮挂载与菜单、点选下载；首页 Shorts 货架卡片按钮常显、预览播放中按钮命中测试为按钮本身且菜单可开；滑动一条后按钮跟随新 id
+
 ## 5. 不在范围内
 
-- 新平台接入范围：本轮做 **B站详情页**（`/video/BV...`）与 **卡片页**（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）、**小红书**发现页卡片与笔记详情页（`/explore/<id>`、`/discovery/item/<id>`、`/red_video/<id>`，含卡片弹层）、**YouTube** 播放页（`/watch?v=...`）与列表卡片（首页 / 搜索结果 / 相关推荐）；B站个人主页、番剧、直播、互动视频不接；小红书搜索页与个人主页需登录、暂不验证，图文笔记无视频可下；YouTube Shorts、直播、播放列表、会员/年龄限制视频不接。
+- 新平台接入范围：本轮做 **B站详情页**（`/video/BV...`）与 **卡片页**（首页 / 热门 / 排行 / 搜索 / 详情页推荐位）、**小红书**发现页卡片与笔记详情页（`/explore/<id>`、`/discovery/item/<id>`、`/red_video/<id>`，含卡片弹层）、**YouTube** 播放页（`/watch?v=...`）、Shorts（`/shorts/<id>`）与列表卡片（首页 / 搜索结果 / 相关推荐 / Shorts 货架）；B站个人主页、番剧、直播、互动视频不接；小红书搜索页与个人主页需登录、暂不验证，图文笔记无视频可下；YouTube 直播、播放列表、会员/年龄限制视频不接。
 - B站音视频**合并**、分段单文件视频（`durl.length > 1`）、登录/大会员能力绕过不在范围内；1080P 及以上以分离流分别下载（M7.3），合并见待定项 #3。
 - 不做 `GM_download`、远程适配下发、独立 UI、常驻后台、MV3 新版本、Web/后端版、签名破解与反爬对抗。
 - `extension/` 仅作回归沙箱，不再发版。
@@ -632,3 +647,6 @@ flowchart TD
 | 2026-10-31 | 新增模块 | 新增 M8「平台接入（小红书）」及 M8.1/M8.2/M8.3；§3.2 目录加入 `platforms/xiaohongshu/*`；§5 范围加入发现页卡片与笔记详情页 | 用户要求继续增加小红书。该站无公开播放接口：详情数据在页面内联 `__INITIAL_STATE__`，卡片只有 id 与 `xsec_token`，档位需按令牌取同源笔记页 HTML；签名链会下发 http，需升 https 才能绕过混合内容拦截 |
 | 2026-10-31 | 新增子需求 | 新增 M7.4「卡片页按钮注入」；§2.2 adapter 增加 `stub?`/`loadItem?`/`prefetch?`，`AnchorRule` 增加 `iconRight?`；M7 模块名由「B站详情页」改为「B站」；§5 范围内加入卡片页 | 实测卡片页不需要播放页：`view?bvid` 跨域可取 cid/标题，playurl 在 www/search 源上带登录态可用；卡片只有 bvid，需占位挂载 + 点击/hover 现取档位 |
 | 2026-10-31 | 新增模块 | 新增 M9「平台接入（YouTube）」及 M9.1/M9.2/M9.3；§2.1 `Stream` 增加可选 `itag`；prd 同步新增 M9 与非目标调整 | 用户要求完成 YouTube。页面内联 `ytInitialPlayerResponse` 已只下发 SABR（无逐档直链），需在页面内用 InnerTube ANDROID_VR 客户端取 `formats/adaptiveFormats` 直链；1080P 及以上为分离流，沿用 M7.3 的「画面/音频分别下载、不合并」 |
+| 2026-11-01 | 新增子需求 | 新增 M9.4「Shorts 播放页与 Shorts 卡片」；§2.2 `AnchorRule` 增加 `alwaysShow?`；M9 输入与 §5 范围加入 `/shorts/` 与 Shorts 货架卡片 | 用户要求 Shorts 类型也提供下载入口。Shorts 播放页用独立竖屏播放器 `#shorts-player`，卡片是 `ytm-shorts-lockup-view-model`，id 只在 `/shorts/` 路径上 |
+| 2026-11-01 | 改验收 | M9.2 验收由「hover 出 ⬇」改为「按钮常显 + 预览播放中仍可点」；M9.2 算法补 `alwaysShow` 与预览覆盖层说明 | 用户反馈卡片 hover 预览时下载按钮消失。YouTube 预览由全局层 `#video-preview` 覆盖缩略图，指针进入后卡片不再 `:hover`；按钮常显即可保持可见 |
+| 2026-11-01 | 改详细设计 | §2.2 `AnchorRule` 增加 `overlay?`；kernel 增页面级浮层挂载（`div[data-dl-layer]` + `getBoundingClientRect` 定位 + rAF 合批）；M9.4 Shorts 卡片锚点改 `alwaysShow: true` + `overlay: true` | Shorts 货架卡片常显后仍不可点：容器 `#contents.ytd-rich-shelf-renderer` 带 `transform` 形成层叠上下文，卡内按钮（`z-index: 99999`）在整页层面压不过 `#video-preview`，命中测试落到视频层；挂到页面级固定层才脱离该上下文 |
