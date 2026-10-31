@@ -305,8 +305,8 @@ flowchart TD
 - 接口：`download(planOrPromise, { streamToDisk?, suggestedName? }): Promise<boolean>`；`createDownloader({nativeFetch, toast})`
 - 数据结构：`DownloadPlan` 见 §2.1；`plan.filename` 可缺省（落盘路径用 `suggestedName`）
 - 算法与规则：`credentials` 由平台给（抖音 `omit`，B站直链 `omit`）；文件名 `sanitize(author + '_' + title + '_' + label) + '.mp4'`，平台可提供 `adapter.filename` 覆盖（B站含分P）；每读一块上报 `received/total`；Picker 的 `AbortError` 视为用户取消，不发请求
-- 错误与边界：非 2xx 回报 `HTTP <status>`（落盘路径先 `writable.abort()`）；`content-length` 缺失时进度显示 `…`；异常回报字符串错误并中止可写流；blob URL 10s 后释放；无 `showSaveFilePicker` 时静默回落 blob 路径
-- 测试要点：`tests/download.test.mjs`（blob 路径、Promise 计划、落盘路径字节一致、取消不请求） + 浏览器冒烟（下载落盘）
+- 错误与边界：非 2xx 回报 `HTTP <status>`（落盘路径先 `writable.abort()`）；`content-length` 缺失时进度显示 `…`；`content-length` 存在但实际收到字节更少（代理/边节点截断）→ `writable.abort()` 丢弃半成品并提示「数据不完整（收到/总字节）」，不得报「下载完成」；异常回报字符串错误并中止可写流；blob URL 10s 后释放；无 `showSaveFilePicker` 时静默回落 blob 路径
+- 测试要点：`tests/download.test.mjs`（blob 路径、Promise 计划、落盘路径字节一致、字节不足判失败、取消不请求） + 浏览器冒烟（下载落盘）
 
 ### M3 页面附着交互 🟢
 模块概要：
@@ -581,14 +581,14 @@ flowchart TD
 - 测试要点：`tests/youtube.test.mjs`（重取命中/未命中退回旧链/两路皆无报错、节点回退、Range 头、文件名与扩展名、http→https）；真页 CDP：1080p 实际写入 77.2 MiB（4 638 次分块），144p 的 Range 请求 `206`
 
 #### M9.4 Shorts 播放页与 Shorts 卡片 🟢
-- **验收**：打开 `https://www.youtube.com/shorts/<11位id>` 后，竖屏播放器（`#shorts-player`）右上 12px 出现 **⬇ 下载**，菜单档位与 `youtubei/v1/player` 一致；首页 Shorts 货架卡片（`ytm-shorts-lockup-view-model`）按钮常显（缩略图右上 8px），点击出该 Short 的档位菜单；滑动切换 Short 后按钮随地址栏 id 更新；直播/播放列表页不注入
+- **验收**：打开 `https://www.youtube.com/shorts/<11位id>` 后，竖屏播放器（`#shorts-player`）右上（站点顶部控件行下方，`top: 70 / right: 12`）出现 **⬇ 下载**，hover 播放器时显示、命中测试为按钮本身，菜单档位与 `youtubei/v1/player` 一致；首页 Shorts 货架卡片（`ytm-shorts-lockup-view-model`）按钮常显（缩略图右上 8px），点击出该 Short 的档位菜单；滑动切换 Short 后按钮随地址栏 id 更新；直播/播放列表页不注入
 - **依赖**：M1.2、M2.1、M3.1、M9.1
 
 详细设计：
 - 数据流：`/shorts/<id>` → entry 选中 `youtubeAdapter` → `ytCurrentVideoId` 读 `pathname` 取 id → 详情锚点 `#shorts-player` → `ytStub` 占位 → `ytRefresh` 走 `ytLoadVideo` 请求 InnerTube → 挂 `self`；Shorts 卡片 → `ytCardVideoId` 取内部 `/shorts/` 链接 → `ytStub` → 常显按钮（挂页面级浮层）→ 点击现取
 - 接口：复用 M9.1 / M9.2：`ytVideoIdFromUrl(href)` 同时解析 `/watch?v=` 与 `/shorts/`；`ytCurrentVideoId(loc)` 改读 `pathname + search`；`ytCardVideoId(el)` 遍历 `a[href]`
 - 数据结构：与 M9.1 / M9.2 相同（Shorts 共用 `Stream` / `VideoItem` / `ytPending`）
-- 算法与规则：Shorts 与普通视频共用 InnerTube `videoId` 通道，不额外解签名；详情锚点 `selector: "#shorts-player"`、`pageScope: /^\/shorts/`、`mount: ["self"]`、`pos: { top: 12, right: 12 }`；卡片锚点 `ytm-shorts-lockup-view-model`（`mount: ["yt-thumbnail-view-model", "self"]`）与旧版 `ytd-reel-item-renderer`（`mount: ["#thumbnail", "self"]`），均 `alwaysShow: true` + `overlay: true`；滑动后地址栏 id 变化 → kernel 发现 `videoId` 不同，摘旧按钮并按新 id 重挂
+- 算法与规则：Shorts 与普通视频共用 InnerTube `videoId` 通道，不额外解签名；详情锚点 `selector: "#shorts-player"`、`pageScope: /^\/shorts/`、`mount: ["self"]`、`pos: { top: 70, right: 12 }`（顶部 12px 是站点控件行：左侧播放/静音、右侧全屏，按钮下移到控件行下方，按钮仍在播放器元素内、随播放器移动）；卡片锚点 `ytm-shorts-lockup-view-model`（`mount: ["yt-thumbnail-view-model", "self"]`）与旧版 `ytd-reel-item-renderer`（`mount: ["#thumbnail", "self"]`），均 `alwaysShow: true` + `overlay: true`；滑动后地址栏 id 变化 → kernel 发现 `videoId` 不同，摘旧按钮并按新 id 重挂
 - 层叠上下文：Shorts 货架容器 `#contents.ytd-rich-shelf-renderer` 带 `transform`，会建立自身层叠上下文，卡片内按钮（即使 `z-index: 99999`）在整页层面仍压不过全局预览层 `#video-preview`。因此 Shorts 卡片改走 `overlay: true`：按钮挂到 `documentElement` 下的页面级固定层（`div[data-dl-layer]`，`position: fixed; inset: 0; pointer-events: none; z-index: 100000`，按钮自身 `pointer-events: auto`），每帧按挂载元素的 `getBoundingClientRect()` 定位到右上内缩 8px；`scroll`（capture）/`resize` 触发 rAF 合批重定位，元素离屏或尺寸为 0 时隐藏。普通网格卡片实测无该层叠上下文问题（25/25 未受困），仍走卡内挂载
 - 错误与边界：`/shorts` 下取不到 id → 不挂；Shorts 页的 `#movie_player` 是 0×0 隐藏节点，不得作为详情锚点（`pageScope` 限 `/watch`）；受限 Short 的报错沿用 M9.1 文案；卡片链接不是视频（频道/播放列表）→ `idFrom` null 不挂
 - 测试要点：`tests/youtube.test.mjs`（`/shorts/` 解析、`ytCurrentVideoId` 读 pathname、Shorts 卡片 id、`#movie_player` 与 `#shorts-player` 的 `pageScope` 互斥、短卡片锚点 `mount/alwaysShow/overlay`）；真页 CDP：`/shorts/<id>` 按钮挂载与菜单、点选下载；首页 Shorts 货架卡片按钮常显、预览播放中按钮命中测试为按钮本身且菜单可开；滑动一条后按钮跟随新 id
@@ -633,6 +633,7 @@ flowchart TD
 
 | 2026-10-31 | 弹层按钮延迟出现：0.11.3 的 DOM 兜底等 `<video>`（实测点击后 2.5 s 才插入），且变更为纯防抖，播放器分步插入不断重置 300 ms 计时 | [src/platforms/xiaohongshu/rules.js:175](file:///E:/work/ai/video-downloader/src/platforms/xiaohongshu/rules.js#L175) 兜底改认 `.player-container / .video-player-media / video`（图文 `.swiper` 不命中）；[src/kernel/core.js:23](file:///E:/work/ai/video-downloader/src/kernel/core.js#L23) `scheduleRender` 300 ms 防抖改 200 ms 节流（渲染后的新变更排下一轮）；`tests/xiaohongshu.test.mjs` 补锚点命中/不命中用例 | 真页注入 0.11.4（弹层 `6ac0fdfe…`，相对点击）：容器/播放器 +173 ms、按钮 **+278 ms**（修复前约 986 ms），`<video>` +2574 ms 已不影响挂载；菜单 1080p/720p 正常。B站首页注入同构建：21/21 挂载，静置 4 s 不增长；`npm test` 78 pass | 对照 M8.1「详情页播放器上出现 ⬇ 下载」与 M3.2「hover 出按钮」，判据未变，修的是挂载时机与调度 |
 | 2026-10-31 | `/red_video` 栏目打开的笔记不挂按钮：该栏目把地址切到 `/red_video/<24hex>`（`xsec_source=pc_dual_feed`），笔记路径正则与详情 `pageScope` 只放行 `explore`/`discovery/item` → `idFrom` 返回 null，锚点被跳过 | [src/platforms/xiaohongshu/rules.js:7](file:///E:/work/ai/video-downloader/src/platforms/xiaohongshu/rules.js#L7) `NOTE_PATH` 增加 `red_video`；[src/platforms/xiaohongshu/rules.js:181](file:///E:/work/ai/video-downloader/src/platforms/xiaohongshu/rules.js#L181) 详情 `pageScope` 同步；`tests/xiaohongshu.test.mjs` 增路径与 scope 断言 | 真页 `https://www.xiaohongshu.com/red_video`（注入 0.11.5）：栏目网格 20/20 挂载；点开笔记弹层 `6ae44628…` 后 1/1 挂载，hover 按钮 78.7×37.25、菜单 `1080p / 720p`，点 720p 解析链接响应 `200`、`content-length` 20 031 057 B（与状态 720p `size` 相同）；`npm test` 78 pass | 对照 M8.1「详情页播放器上出现 ⬇ 下载」与 M8.2「卡片 hover/点击后列出该笔记的清晰度并可下载」，判据未变，修的是笔记路径识别 |
+| 2026-11-01 | 服务端回 `206` + 完整 `content-length` 却只给极少字节时误报「✓ 下载完成」：读取循环正常结束（`done`）后即按成功关闭可写流，未核对实际字节数 | [src/kernel/download.js:41](file:///E:/work/ai/video-downloader/src/kernel/download.js#L41) 读取结束后比对 `received` 与 `total`，不足则 `writable.abort()` 并提示「✗ 下载失败：数据不完整（收到/总字节）」；`tests/download.test.mjs` 增半包用例 | 真页 0.13.0：googlevideo `itag=160` 回 `206`、`content-length 705986`、正文 1 B，toast 由「✓ 下载完成」变为「✗ 下载失败：数据不完整（1/705986 字节）」，writer `aborted:true / closed:false`；`npm test` 100 pass | 对照 M2.2「字节数落盘等于服务端 `content-length`」与 M9.2 下载判据，判据未变，修的是成功判定 |
 
 ## 8. 调整记录（标准档 / 完整档变更）
 
@@ -650,3 +651,4 @@ flowchart TD
 | 2026-11-01 | 新增子需求 | 新增 M9.4「Shorts 播放页与 Shorts 卡片」；§2.2 `AnchorRule` 增加 `alwaysShow?`；M9 输入与 §5 范围加入 `/shorts/` 与 Shorts 货架卡片 | 用户要求 Shorts 类型也提供下载入口。Shorts 播放页用独立竖屏播放器 `#shorts-player`，卡片是 `ytm-shorts-lockup-view-model`，id 只在 `/shorts/` 路径上 |
 | 2026-11-01 | 改验收 | M9.2 验收由「hover 出 ⬇」改为「按钮常显 + 预览播放中仍可点」；M9.2 算法补 `alwaysShow` 与预览覆盖层说明 | 用户反馈卡片 hover 预览时下载按钮消失。YouTube 预览由全局层 `#video-preview` 覆盖缩略图，指针进入后卡片不再 `:hover`；按钮常显即可保持可见 |
 | 2026-11-01 | 改详细设计 | §2.2 `AnchorRule` 增加 `overlay?`；kernel 增页面级浮层挂载（`div[data-dl-layer]` + `getBoundingClientRect` 定位 + rAF 合批）；M9.4 Shorts 卡片锚点改 `alwaysShow: true` + `overlay: true` | Shorts 货架卡片常显后仍不可点：容器 `#contents.ytd-rich-shelf-renderer` 带 `transform` 形成层叠上下文，卡内按钮（`z-index: 99999`）在整页层面压不过 `#video-preview`，命中测试落到视频层；挂到页面级固定层才脱离该上下文 |
+| 2026-11-01 | 改详细设计 | M9.4 Shorts 播放页详情锚点 `pos` 由 `top: 12` 改为 `top: 70`；验收补「站点顶部控件行下方」 | Shorts 页顶部 12px 落在站点控件层：`div.player-controls`（`position:absolute; z-index:1`）是 `#shorts-player`（`z-index:0`）的兄弟节点，整层压在播放器之上，按钮即使 `z-index:99999` 也命中到控件；下移到 48px 控件行以下（70px）后命中恢复为按钮 |

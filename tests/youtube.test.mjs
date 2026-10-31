@@ -422,7 +422,8 @@ test("ytRules 播放页/Shorts 锚点与卡片锚点", () => {
   const shorts = ytRules.anchors.find((a) => a.selector === "#shorts-player");
   assert.equal(shorts.kind, "detail");
   assert.deepEqual(shorts.mount, ["self"]);
-  assert.deepEqual(shorts.pos, { top: 12, right: 12 });
+  // 顶部 12px 是站点控件（播放/静音/全屏），按钮下移到 70px 让开
+  assert.deepEqual(shorts.pos, { top: 70, right: 12 });
   assert.equal(shorts.pageScope.test("/shorts/" + ID), true);
   assert.equal(shorts.pageScope.test("/watch"), false);
   const card = ytRules.anchors.filter((a) => a.kind === "card");

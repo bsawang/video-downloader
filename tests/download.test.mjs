@@ -117,6 +117,46 @@ test("下载：plan 可以是 Promise，流式写盘不建 blob", async () => {
   }
 });
 
+test("下载：字节数不足 content-length 时判失败并丢弃半成品", async () => {
+  const dom = stubDom();
+  const toasts = [];
+  const state = { aborted: false, closed: false, writes: 0 };
+  const prevPicker = globalThis.showSaveFilePicker;
+  globalThis.showSaveFilePicker = async () => ({
+    createWritable: async () => ({
+      write: async () => {
+        state.writes++;
+      },
+      close: async () => {
+        state.closed = true;
+      },
+      abort: async () => {
+        state.aborted = true;
+      },
+    }),
+  });
+  const nativeFetch = async () => ({
+    ok: true,
+    status: 206,
+    headers: new Headers({ "content-length": "1354370", "content-type": "video/mp4" }),
+    body: bodyOf([[1]]),
+  });
+  try {
+    const download = createDownloader({ nativeFetch, toast: (m) => toasts.push(m) });
+    const ok = await download(Promise.resolve({ url: "https://cdn/v", filename: "x.mp4" }), { streamToDisk: true });
+    assert.equal(ok, false);
+    assert.equal(state.writes, 1);
+    assert.equal(state.aborted, true);
+    assert.equal(state.closed, false);
+    assert.match(toasts.at(-1), /^✗ 下载失败：数据不完整（1\/1354370 字节）$/);
+    assert.ok(!toasts.includes("✓ 下载完成"));
+  } finally {
+    if (prevPicker === undefined) delete globalThis.showSaveFilePicker;
+    else globalThis.showSaveFilePicker = prevPicker;
+    dom.restore();
+  }
+});
+
 test("下载：用户取消保存对话框不发起请求", async () => {
   const dom = stubDom();
   const toasts = [];

@@ -58,13 +58,14 @@ export const ytRules = {
       pos: { top: 12, right: 12 },
     },
     {
-      // Shorts 页的 #movie_player 是 0×0 隐藏节点，实际播放器是竖屏 #shorts-player
+      // Shorts 页的 #movie_player 是 0×0 隐藏节点，实际播放器是竖屏 #shorts-player。
+      // 顶部 12px 一排是站点控件（左：播放/静音，右：全屏等），按钮下移让开它们的 48px 高度
       selector: "#shorts-player",
       idFrom: () => ytCurrentVideoId(),
       kind: "detail",
       pageScope: /^\/shorts/,
       mount: ["self"],
-      pos: { top: 12, right: 12 },
+      pos: { top: 70, right: 12 },
     },
     // 卡片按钮常显：hover 预览是覆盖在缩略图上的全局层（#video-preview），
     // 指针进入预览层后卡片不再 :hover，hover 揭示会把按钮藏掉

@@ -41,18 +41,20 @@
   - Shorts DOM：播放页实际播放器是竖屏 `#shorts-player`（405×767），`#movie_player` 存在但 0×0 隐藏；货架卡片 `ytm-shorts-lockup-view-model`，id 只在内部 `a[href="/shorts/<id>"]`，标题在 `h3`
   - Shorts 直链：`ANDROID_VR` 对该 Short 回 `LOGIN_REQUIRED` → `IOS` 兜底 `OK`，30 条 adaptive、0 条 progressive（菜单因此只有「画面（无音轨）」+ 音频）
 - 改动：
-  - [src/platforms/youtube/rules.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/rules.js)：`ytVideoIdFromUrl` 同时认 `/watch?v=` 与 `/shorts/`；`ytCurrentVideoId` 读 `pathname + search`；`ytCardVideoId` 遍历任意 `a[href]`；新增 `#shorts-player` 详情锚点（`pageScope: /^\/shorts/`）；卡片锚点加 `ytm-shorts-lockup-view-model` / `ytd-reel-item-renderer`，全部 `alwaysShow`，Shorts 两条另加 `overlay`
+  - [src/platforms/youtube/rules.js](file:///E:/work/ai/video-downloader/src/platforms/youtube/rules.js)：`ytVideoIdFromUrl` 同时认 `/watch?v=` 与 `/shorts/`；`ytCurrentVideoId` 读 `pathname + search`；`ytCardVideoId` 遍历任意 `a[href]`；新增 `#shorts-player` 详情锚点（`pageScope: /^\/shorts/`，`pos: { top: 70, right: 12 }` —— 顶部 12px 落在站点控件行（播放/静音/全屏按钮 y 80..128）下方会被吃掉命中，下移到 70px 让开 48px 控件）；卡片锚点加 `ytm-shorts-lockup-view-model` / `ytd-reel-item-renderer`，全部 `alwaysShow`，Shorts 两条另加 `overlay`
   - [src/kernel/core.js](file:///E:/work/ai/video-downloader/src/kernel/core.js)：新增页面级浮层挂载（`div[data-dl-layer]`：`fixed;inset:0;pointer-events:none;z-index:100000`，按钮自身 `pointer-events:auto`）；`placeOverlay` 按挂载元素 `getBoundingClientRect()` 定位右上内缩 8px，离屏/零尺寸隐藏；`scroll`(capture)/`resize` 走 rAF 合批重定位；节点复用/卸载时同步清理浮层条目
   - [src/kernel/ui.js](file:///E:/work/ai/video-downloader/src/kernel/ui.js)：卡片按钮支持 `fixed` 定位；常显由 `alwaysShow` 控制
-  - 文档：prd M9 范围、spec §2.2 `AnchorRule.alwaysShow/overlay`、M9.2/M9.4 详细设计、README「YouTube 说明」补 Shorts 与常显按钮
+  - [src/kernel/download.js:43](file:///E:/work/ai/video-downloader/src/kernel/download.js#L43)：补完整性校验 —— 服务端给了 `content-length` 但实际只收到更少字节时，`writable.abort()` 丢弃半成品并提示「✗ 下载失败：数据不完整（收到/总字节）」，不再误报 `✓ 下载完成`（对照 M3.2「落盘字节数等于 content-length」）
+  - 文档：prd M9 范围、spec §2.2 `AnchorRule.alwaysShow/overlay`、M9.2/M9.4 详细设计（含控件行避让与层叠上下文）、README「YouTube 说明」补 Shorts 与常显按钮
   - 版本 0.12.0 → **0.13.0**
-- 单测：`npm test` **99 pass / 0 fail**（含 Shorts id 解析、`#movie_player`/`#shorts-player` scope 互斥、卡片 `alwaysShow/overlay`）
-- 真页收点（CDP 注入 0.13.0，首页 Shorts 货架）：
-  - 10/10 Shorts 卡片按钮挂浮层；例：缩略图 311×466 @ (264,629) → 按钮 27×28 @ (540,637)（右缩 8px / 上缩 8px）；视口外卡片按钮 `display:none`
+- 单测：`npm test` **100 pass / 0 fail**（含 Shorts id 解析、`#movie_player`/`#shorts-player` scope 互斥、卡片 `alwaysShow/overlay`、字节不足判失败）
+- 真页收点（CDP 注入 0.13.0）：
+  - 首页 Shorts 货架：10/10 卡片按钮挂浮层；例：缩略图 311×466 @ (264,629) → 按钮 27×28 @ (540,637)（右缩 8px / 上缩 8px）；视口外卡片按钮 `display:none`
   - hover 预览激活（`ytd-video-preview` 带 `Active/Playing`，`<video>` `readyState 4`、`t=1.7s`、未暂停）时按钮仍 `display:block`，按钮中心 `elementFromPoint` = `button[data-dl-icon]`，层序 `button > video > #inline-preview-player`
-  - 点按钮 → 菜单 **6 档**（720p/480p/360p/240p/144p 画面（无音轨）+ 音频 130kbps），标题取自接口
-  - 点 144p：InnerTube 重取 200；googlevideo `itag=160` 响应 `206`、`Content-Range: bytes 0-705985/705986`；随后代理节点中断（`Range: bytes=0-` 正文只回 1 B，直连 googlevideo 全部超时），落盘未完成 —— 环境网络问题，链路请求本身正确
-- 构建：`npm run build` → `dist/douyin.user.js` **72 396 B**，`@version 0.13.0`，sha256 `4efb7c569f5b5cea53999c8c6a8b0cfb9dbb8f4f347d90a502372da6b09f6bbd`
+  - 货架卡片点按钮 → 菜单 **6 档**（720p/480p/360p/240p/144p 画面（无音轨）+ 音频 130kbps），标题取自接口
+  - Shorts 播放页 `/shorts/KTNDdzmWnkU`：`stats {candidates:1,anchors:1,mounted:1}`，按钮 **79×40 @ (1144,134)**（`#shorts-player` 829×767 @ (829,64) 右上 `top:70/right:12`）；悬停按钮中心命中 `button[data-dl-icon]`，层序 `button > video > #shorts-player > #container`；点开菜单 6 档；点 144p → InnerTube 200 + googlevideo 请求发出
+  - 当前网络下字节流不可用（独立于产品代码的对照）：同源页面直接 `fetch` googlevideo 也拿不到正文 —— `/shorts` 页直链 302 到另一节点后响应缺 `Access-Control-Allow-Origin`（`Network.loadingFailed` = `MissingAllowOriginHeader`）→ toast「✗ 下载失败：TypeError: Failed to fetch」；`/watch` 页直链 `206 + content-length 705986` 但正文只回 1 B，新校验给出「✗ 下载失败：数据不完整（1/705986 字节）」并 abort 半成品。链路请求（档位/签名/Range）本身正确，等服务端/代理恢复后即可完整落盘
+- 构建：`npm run build` → `dist/douyin.user.js` **72 841 B**，`@version 0.13.0`，sha256 `31a4949c406fe445e975478d484a99a7518804787c9e5c7276df79faca6e9bee`
 
 ## v0.12.0 ✅ {spec §M9 · YouTube 平台接入}
 - 调研（CDP 运行态 + InnerTube 实测）：

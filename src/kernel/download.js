@@ -39,6 +39,12 @@ export function createDownloader({ nativeFetch, toast }) {
         received += value.length;
         if (total) toast("下载中 " + Math.round((received / total) * 100) + "%");
       }
+      // 代理/边节点可能回 206 + 完整 content-length 却只给几个字节，不能当成功
+      if (total && received < total) {
+        if (writable) await writable.abort();
+        toast("✗ 下载失败：数据不完整（" + received + "/" + total + " 字节）");
+        return false;
+      }
       if (writable) {
         await writable.close();
         toast("✓ 下载完成");
