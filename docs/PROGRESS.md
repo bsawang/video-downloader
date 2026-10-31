@@ -55,6 +55,7 @@
   - 360p 合并档：3 次 player（前两个 client 的链被探失败），探测 `bytes=1048576-1048577` → `206`；下载 `bytes=0-2580481` + `bytes=0-1068151` 均 `206`；toast **✓ 下载完成（已合并）**；OPFS 输出 **3 648 103 B**、文件头 `ftyp`
   - 1080p 合并档：画面 `bytes=0-98561000` + 音轨 `bytes=0-2799222`，OPFS 输出 **101 359 333 B**，与进度一致
 - 构建：`npm run build` → `dist/douyin.user.js` **94 837 B**（0.14.3 93 266 B，+1 571 B），`node --check` 通过，`@version 0.14.4`，sha256 `a4e12035c51fa27585a59840783e98b58cb275dbad4b37fec6364c1b2e546075`
+- 发版：release v0.14.4 挂 `douyin.user.js` + `video-downloader-v0.5.3.crx/.zip`；固定别名 → `200`、94 837 B、`@version 0.14.4`，sha256 与本地全等（`a4e12035…6075`）；`releases/latest` → `v0.14.4`
 
 ## v0.14.3 ✅ {spec §M9.3 · 直链 HEAD 探测 + 签名重取，修「下载报错 / 数据不完整」}
 - 缺陷 / 需求（用户反馈）：「网址标记不安全；之前可以下载时下载速度很慢，现在下载链接报错」
