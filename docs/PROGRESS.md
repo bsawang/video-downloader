@@ -36,6 +36,8 @@
   - 画面全量：换 `BV1sqxP69Ebq` 点「1080P 画面（无音轨）」→ 落盘 **18 821 824 B**，`close` 成功、无 abort；文件名 `…_高清 1080P 画面（无音轨）.mp4`
   - 观察字节数时把 `showSaveFilePicker` 换成内存 writer（页面内测试桩），收点后删除测试桩并 reload 复原原生保存对话框
   - 抖音回归：`__dlStats` 与按钮数正常（kernel 未改动）
+- 登录依赖复核（同一视频同一时刻，`fnval=4048` 对比 `credentials`）：`include` → `dash.video` 含 `80`；`omit`（无 cookie）→ 仅 `[32,16]`，接口仍「承认」`accept_quality` 有 80 但不发流。即 1080P **档位**需登录（非会员即可），1080P+（112）需大会员；菜单按实际 `dash.video` 档位补，未登录不会出现死链行
+- 直链独立性：取登录态生成的 1080P AVC `baseUrl`，用 Node 裸请求（无任何 cookie）带 `Range` + `Referer: https://www.bilibili.com/` → `206`、`content-range: bytes 0-1023/83 276 924`；不带 `Referer` → `403`（CDN 防盗链）。URL 自带 `deadline` 签名（约 2 小时），下载路径 `credentials: "omit"` 可行
 - 构建：`npm run build` → `dist/douyin.user.js` **33 569 B（30.7 KB）**，`node --check` 通过，头 `@version 0.9.0`
 - 发版：`gh release create v0.9.0`（资产 `douyin.user.js` + `video-downloader-v0.5.3.crx` + `.zip`）；`releases/latest` → `v0.9.0`；固定别名拉取 `200`、33 569 B、`@version 0.9.0`，sha256 `aac0417a…050` 与 GitHub 资产 digest 及本地 `dist/` 全等
 - 未覆盖：合流未做（待定项 #3）；大会员档（qn 112）不可达是平台策略；分段单文件视频仍拒
