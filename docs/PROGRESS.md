@@ -39,7 +39,7 @@
 - 真页收点（CDP 注入 0.11.1 等价构建，新旧按钮用 `data-old` 区分）：
   - 小红书 `/red_video`：20 张视频卡各出新按钮，`computed font-family` 为新栈；hover 揭示 → 新按钮 27.1×24.9 @1756,532、`elementFromPoint` 命中按钮本身；6 倍放大截图（`captureScreenshot` clip）为白色单色箭头
   - 字体对照探针（同一 canvas 五个栈 56px，页面截图）：旧小红书栈画彩色 emoji；旧 B站栈、新栈、`Segoe UI Symbol`、`Microsoft YaHei` 四者均为同形单色箭头 → 新栈与用户此前在 B站/抖音看到的箭头一致
-  - B站详情页 `BV1ecnb6oEnt`：注入后 `⬇ 下载` 按钮 78.7×35 @1081,184，`font-family` 为新栈；截图 `H:/temp/bili-detail-btn.png` 为白色单色箭头 + 「下载」
+  - B站详情页 `BV1ecnb6oEnt`：注入后 `⬇ 下载` 按钮 78.7×35 @1081,184，`font-family` 为新栈；放大截图为白色单色箭头 + 「下载」
   - B站首页卡片：注入后点开档位弹层，`computed font-family` 为新栈，4 行 `⬇ 高清 1080P 画面（无音轨）/ 高清 1080P 音频 / 高清 720P / 流畅 360P`，截图 `H:/temp/menu-mono.png` 箭头全为单色
 - 构建：`npm run build` → `dist/douyin.user.js` **52 661 B**，`@version 0.11.1`，sha256 `c591d0b0…7fd8`
 - 未覆盖：macOS 下的 `Apple Symbols` / `Noto Sans Symbols 2` 兜底未实测；小红书登录态丢失后无法复验卡片点击（未登录时卡片无令牌，点按钮不出菜单，与本次改动无关）；按钮宽度因去掉 emoji 宽字形而略窄（27.1 vs 37.9，详情 78.7 vs 91）
